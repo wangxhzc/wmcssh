@@ -10,6 +10,9 @@ import { stringToBase64 } from "../../services/terminal/terminalCodec";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { sessionTabIndex } from "./sessionTabIndex";
 import { terminalRegistry } from "./terminalRegistry";
+import { requestConnectionCredentials, type ConnectionCredentials } from "../hosts/connectionCredentials";
+import { updateHost } from "../../services/tauri/hostApi";
+import { useHostStore } from "../../stores/hostStore";
 
 const INPUT_FLUSH_DELAY_MS = 10;
 const MAX_INPUT_FLUSH_CHARS = 1024;
@@ -103,6 +106,21 @@ export async function flushTerminalInput(tabId: string) {
     stopTerminalInput(tabId, "ssh_write_failed");
 
     const appError = normalizeAppError(error);
+    if (appError.code === "input_buffer_full") {
+      useTerminalStore.getState().setTabStatus(
+        tabId,
+        "connected",
+        "输入发送过快，已暂时暂停输入",
+        appError.code
+      );
+      window.setTimeout(() => {
+        const current = useTerminalStore.getState().tabs.find((item) => item.tabId === tabId);
+        if (current?.kind !== "terminal" || current.errorCode !== "input_buffer_full") return;
+        resumeTerminalInput(tabId);
+        useTerminalStore.getState().setTabStatus(tabId, "connected");
+      }, 1500);
+      return;
+    }
     if (appError.code === "session_closed" || appError.code === "session_not_found") {
       console.warn("[wmcssh][terminal] stop input after closed session", {
         tabId,
@@ -170,7 +188,44 @@ export function queueTerminalInput(tabId: string, data: string) {
   scheduleTerminalInputFlush(tabId);
 }
 
+async function rememberConnectionCredentials(host: HostDto, credentials: ConnectionCredentials) {
+  if (credentials.rememberUsername || credentials.rememberAuth) {
+    host = await updateHost(host.id, {
+      username: credentials.rememberUsername ? credentials.username?.trim() : undefined,
+      authType: credentials.rememberAuth ? credentials.authType : undefined,
+      password: credentials.rememberAuth && credentials.authType === "password" && credentials.password
+        ? { action: "replace", value: credentials.password }
+        : undefined,
+      privateKeyPath: credentials.rememberAuth && credentials.authType === "private_key"
+        ? credentials.privateKeyPath
+        : undefined,
+      privateKeyPassphrase: credentials.rememberAuth && credentials.authType === "private_key" && credentials.privateKeyPassphrase
+        ? { action: "replace", value: credentials.privateKeyPassphrase }
+        : undefined
+    });
+    await useHostStore.getState().loadHosts();
+  }
+  return host;
+}
+
+function connectInput(hostId: string, credentials: ConnectionCredentials) {
+  return {
+    hostId,
+    initialCols: DEFAULT_TERMINAL_COLS,
+    initialRows: DEFAULT_TERMINAL_ROWS,
+    username: credentials.username?.trim() || undefined,
+    authType: credentials.authType,
+    password: credentials.password,
+    privateKeyPath: credentials.privateKeyPath,
+    privateKeyPassphrase: credentials.privateKeyPassphrase
+  };
+}
+
 export async function connectHost(host: HostDto) {
+  const credentials = await requestConnectionCredentials(host);
+  if (!credentials) return;
+  host = await rememberConnectionCredentials(host, credentials);
+
   const store = useTerminalStore.getState();
   const tabId = store.createTerminalTab({ hostId: host.id, title: host.name });
 
@@ -193,7 +248,7 @@ export async function connectHost(host: HostDto) {
 
   try {
     const { sessionId } = await sshConnect(
-      { hostId: host.id, initialCols: DEFAULT_TERMINAL_COLS, initialRows: DEFAULT_TERMINAL_ROWS },
+      connectInput(host.id, credentials),
       onData
     );
 
@@ -202,7 +257,52 @@ export async function connectHost(host: HostDto) {
     terminalRegistry.bindSession(tabId, sessionId);
   } catch (error) {
     const appError = normalizeAppError(error);
-    store.setTabStatus(tabId, "error", appError.message);
+    store.setTabStatus(tabId, "error", appError.message, appError.code);
+    if (appError.code === "auth_failed" || appError.code === "secret_not_found" || appError.code === "host_invalid") {
+      void retryAuthentication(tabId, appError.message);
+    }
+  }
+}
+
+export async function retryAuthentication(tabId: string, message: string) {
+  const store = useTerminalStore.getState();
+  const tab = store.tabs.find((item) => item.tabId === tabId);
+  if (!tab || tab.kind !== "terminal") return;
+  const host = useHostStore.getState().hosts.find((item) => item.id === tab.hostId);
+  if (!host) return;
+
+  const credentials = await requestConnectionCredentials(host, {
+    force: true,
+    message: `认证失败：${message}。请重新输入用户名或认证凭据。`
+  });
+  if (!credentials) return;
+  await rememberConnectionCredentials(host, credentials);
+
+  if (tab.sessionId) {
+    await sshDisconnect({ sessionId: tab.sessionId }).catch(() => undefined);
+    sessionTabIndex.unbind(tab.sessionId);
+  }
+  store.setTabStatus(tabId, "reconnecting");
+  resumeTerminalInput(tabId);
+  const onData = new Channel<SshDataEvent>();
+  terminalRegistry.bindDataChannel(tabId, onData);
+  onData.onmessage = (payload) => {
+    const dataBase64 =
+      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.dataBase64 ??
+      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.data_base64 ??
+      (payload as { dataBase64?: string; data_base64?: string }).dataBase64 ??
+      (payload as { dataBase64?: string; data_base64?: string }).data_base64;
+    if (dataBase64) terminalRegistry.writeByTabId(tabId, base64ToUint8Array(dataBase64));
+  };
+
+  try {
+    const { sessionId } = await sshConnect(connectInput(host.id, credentials), onData);
+    store.replaceSession(tabId, sessionId);
+    sessionTabIndex.bind(sessionId, tabId);
+    terminalRegistry.bindSession(tabId, sessionId);
+  } catch (error) {
+    const appError = normalizeAppError(error);
+    store.setTabStatus(tabId, "error", appError.message, appError.code);
   }
 }
 
@@ -269,6 +369,9 @@ export async function reconnectTab(tabId: string) {
     resumeTerminalInput(tabId);
   } catch (error) {
     const appError = normalizeAppError(error);
-    store.setTabStatus(tabId, "error", appError.message);
+    store.setTabStatus(tabId, "error", appError.message, appError.code);
+    if (appError.code === "auth_failed" || appError.code === "secret_not_found" || appError.code === "host_invalid") {
+      void retryAuthentication(tabId, appError.message);
+    }
   }
 }

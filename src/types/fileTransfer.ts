@@ -24,10 +24,11 @@ export type ListRemoteDirectoryResult = {
 };
 
 export type UploadRemoteFileInput = {
+  transferId: string;
   transferSessionId: SessionId;
   remoteDirPath: string;
   fileName: string;
-  contentBase64: string;
+  localFilePath: string;
 };
 
 export type RemoteDirectoryFilePayload = {
@@ -35,12 +36,27 @@ export type RemoteDirectoryFilePayload = {
   contentBase64: string;
 };
 
+export type UploadRemoteDirectoryFilePayload = {
+  relativePath: string;
+  localFilePath: string;
+};
+
 export type UploadRemoteDirectoryInput = {
+  transferId: string;
   transferSessionId: SessionId;
   remoteDirPath: string;
   directoryName: string;
   directories: string[];
-  files: RemoteDirectoryFilePayload[];
+  files: UploadRemoteDirectoryFilePayload[];
+};
+
+export type UploadProgress = {
+  transferId: string;
+  uploadedBytes: number;
+  totalBytes: number;
+  currentFile: string;
+  completedFiles: number;
+  totalFiles: number;
 };
 
 export type DownloadRemoteFileInput = {

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Channel } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { mkdir, readDir, readFile, writeFile } from "@tauri-apps/plugin-fs";
-import { base64ToUint8Array, uint8ArrayToBase64 } from "../../../services/terminal/terminalCodec";
+import { mkdir, readDir, writeFile } from "@tauri-apps/plugin-fs";
+import { base64ToUint8Array } from "../../../services/terminal/terminalCodec";
 import {
   downloadRemotePath,
+  cancelUpload,
   listRemoteDirectory,
   openFileTransferSession,
   uploadRemoteDirectory,
@@ -13,8 +15,9 @@ import { useTerminalStore } from "../../../stores/terminalStore";
 import type { AppErrorDto } from "../../../types/errors";
 import type {
   FileTransferLoadState,
-  RemoteDirectoryFilePayload,
-  RemoteFileEntry
+  RemoteFileEntry,
+  UploadProgress,
+  UploadRemoteDirectoryFilePayload
 } from "../../../types/fileTransfer";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
 
@@ -28,6 +31,17 @@ type FileTransferViewProps = {
 const MAX_DIRECTORY_FILE_COUNT = 1000;
 const MAX_DIRECTORY_DEPTH = 10;
 const DIRECTORY_LIMIT_MESSAGE = "文件数量过多请打包后上传或下载";
+
+type UploadViewState = UploadProgress & { startedAt: number; cancelling: boolean };
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = value / 1024;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
+  return `${size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)} ${units[index]}`;
+}
 
 function parentPath(path: string) {
   if (path === "/") return "/";
@@ -52,7 +66,7 @@ function relativeDepth(path: string) {
 
 async function collectLocalDirectoryPayload(rootPath: string) {
   const directories: string[] = [];
-  const files: RemoteDirectoryFilePayload[] = [];
+  const files: UploadRemoteDirectoryFilePayload[] = [];
 
   async function visit(currentPath: string, relativeDirPath: string, depth: number) {
     if (depth > MAX_DIRECTORY_DEPTH) {
@@ -80,10 +94,9 @@ async function collectLocalDirectoryPayload(rootPath: string) {
         throw new Error(DIRECTORY_LIMIT_MESSAGE);
       }
 
-      const content = await readFile(childPath);
       files.push({
         relativePath,
-        contentBase64: uint8ArrayToBase64(content)
+        localFilePath: childPath
       });
     }
   }
@@ -96,6 +109,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const [state, setState] = useState<FileTransferLoadState>({ status: "idle" });
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadViewState>();
   const [contextMenu, setContextMenu] = useState<{ entry: RemoteFileEntry; x: number; y: number } | null>(null);
   const [uploadMenu, setUploadMenu] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -103,6 +117,16 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const contextMenuPosition = useAnchoredMenuPosition(contextMenu, menuRef);
   const uploadMenuPosition = useAnchoredMenuPosition(uploadMenu, uploadMenuRef);
   const bindFileTransferSession = useTerminalStore((store) => store.bindFileTransferSession);
+
+  const createProgressChannel = (transferId: string) => {
+    const startedAt = Date.now();
+    const channel = new Channel<UploadProgress>();
+    channel.onmessage = (progress) => {
+      if (progress.transferId !== transferId) return;
+      setUploadProgress((current) => ({ ...progress, startedAt: current?.startedAt ?? startedAt, cancelling: current?.cancelling ?? false }));
+    };
+    return channel;
+  };
 
   const loadDirectory = useCallback(
     async (path?: string) => {
@@ -201,22 +225,26 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
 
       setBusy(true);
       setNotice(undefined);
+      const transferId = crypto.randomUUID();
+      const progressChannel = createProgressChannel(transferId);
 
       try {
-        const content = await readFile(filePath);
         await uploadRemoteFile({
+          transferId,
           transferSessionId,
           remoteDirPath: state.path,
           fileName,
-          contentBase64: uint8ArrayToBase64(content)
-        });
+          localFilePath: filePath
+        }, progressChannel);
         setNotice(`已上传 ${fileName}`);
         await loadDirectory(state.path);
       } catch (error) {
         console.error("[wmcssh][file-transfer] upload failed", error);
         const appError = error as AppErrorDto;
-        setNotice(`上传失败：${appError.message ?? String(error)}`);
+        const message = appError.message ?? String(error);
+        setNotice(message === "上传已取消" ? message : `上传失败：${message}`);
       } finally {
+        setUploadProgress(undefined);
         setBusy(false);
       }
     })();
@@ -248,23 +276,27 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
 
       setBusy(true);
       setNotice(undefined);
+      const transferId = crypto.randomUUID();
+      const progressChannel = createProgressChannel(transferId);
 
       try {
         const payload = await collectLocalDirectoryPayload(directoryPath);
         await uploadRemoteDirectory({
+          transferId,
           transferSessionId,
           remoteDirPath: state.path,
           directoryName,
           directories: payload.directories,
           files: payload.files
-        });
+        }, progressChannel);
         setNotice(`已上传目录 ${directoryName}`);
         await loadDirectory(state.path);
       } catch (error) {
         console.error("[wmcssh][file-transfer] directory upload failed", error);
         const message = error instanceof Error ? error.message : (error as AppErrorDto).message ?? String(error);
-        setNotice(`上传失败：${message}`);
+        setNotice(message === "上传已取消" ? message : `上传失败：${message}`);
       } finally {
+        setUploadProgress(undefined);
         setBusy(false);
       }
     })();
@@ -433,6 +465,23 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           {state.status === "ready" ? state.path : "正在连接远程目录..."}
         </div>
       </div>
+
+      {uploadProgress ? (() => {
+        const percent = uploadProgress.totalBytes > 0 ? Math.min(100, uploadProgress.uploadedBytes / uploadProgress.totalBytes * 100) : uploadProgress.completedFiles === uploadProgress.totalFiles ? 100 : 0;
+        const elapsedSeconds = Math.max(0.25, (Date.now() - uploadProgress.startedAt) / 1000);
+        const speed = uploadProgress.uploadedBytes / elapsedSeconds;
+        return <div className="upload-progress-panel">
+          <div className="upload-progress-heading"><span>正在上传 {uploadProgress.currentFile}</span><strong>{percent.toFixed(0)}%</strong></div>
+          <div className="upload-progress-track"><div className="upload-progress-fill" style={{ width: `${percent}%` }} /></div>
+          <div className="upload-progress-meta">
+            <span>{formatBytes(uploadProgress.uploadedBytes)} / {formatBytes(uploadProgress.totalBytes)} · {formatBytes(speed)}/s{uploadProgress.totalFiles > 1 ? ` · ${uploadProgress.completedFiles} / ${uploadProgress.totalFiles} 个文件` : ""}</span>
+            <button type="button" className="ghost-button" disabled={uploadProgress.cancelling} onClick={() => {
+              setUploadProgress((current) => current ? { ...current, cancelling: true } : current);
+              void cancelUpload(uploadProgress.transferId);
+            }}>{uploadProgress.cancelling ? "取消中..." : "取消"}</button>
+          </div>
+        </div>;
+      })() : null}
 
       {notice ? <div className="file-transfer-note">{notice}</div> : null}
 

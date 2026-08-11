@@ -354,8 +354,9 @@ button {
 
 .file-transfer-view {
   height: 100%;
-  display: grid;
-  grid-template-rows: auto 1fr;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background:
     radial-gradient(circle at top right, rgb(120 120 120 / 0.35), transparent 28%),
     linear-gradient(180deg, #333, #3b3b3b 45%, #333);
@@ -393,12 +394,60 @@ button {
   color: #cbd5e1;
 }
 
+.upload-progress-panel {
+  display: grid;
+  gap: 7px;
+  margin: 0 12px 8px;
+  padding: 9px 11px;
+  border: 1px solid #315778;
+  border-radius: 9px;
+  background: rgb(24 43 60 / 92%);
+  color: #dbeafe;
+  font-size: 12px;
+}
+
+.upload-progress-heading,
+.upload-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.upload-progress-heading span,
+.upload-progress-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #17202b;
+}
+
+.upload-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3b82f6, #38bdf8);
+  transition: width 0.2s ease;
+}
+
+.upload-progress-meta {
+  color: #a9c5dc;
+}
+
 .file-transfer-error {
   display: grid;
   gap: 10px;
 }
 
 .file-transfer-list {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 10px;
   overflow: auto;
 }
@@ -723,6 +772,51 @@ button {
   background: #2b1114;
   color: #fecaca;
   font-size: 12px;
+}
+
+.terminal-status-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(720px, calc(100% - 32px));
+  padding: 8px 10px;
+  border: 1px solid #785c22;
+  border-radius: 9px;
+  background: rgb(46 38 22 / 94%);
+  color: #fde68a;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 35%);
+  transform: translateX(-50%);
+  font-size: 12px;
+}
+
+.terminal-status-banner.error {
+  border-color: #7f1d1d;
+  background: rgb(43 17 20 / 96%);
+  color: #fecaca;
+}
+
+.vault-overlay {
+  z-index: 2000;
+  backdrop-filter: blur(14px);
+}
+
+.vault-dialog {
+  width: min(460px, 100%);
+}
+
+.vault-description {
+  margin: 0 0 14px;
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.vault-dialog .field + .field {
+  margin-top: 10px;
 }
 
 @media (max-width: 900px) {

@@ -1,5 +1,6 @@
 import type { EpochMillis, HostId, SessionId } from "./common";
 import type { AppErrorDto } from "./errors";
+import type { AuthType } from "./host";
 
 export type SessionStatus =
   | "connecting"
@@ -13,6 +14,11 @@ export type SshConnectInput = {
   hostId: HostId;
   initialCols: number;
   initialRows: number;
+  username?: string;
+  authType?: AuthType;
+  password?: string;
+  privateKeyPath?: string;
+  privateKeyPassphrase?: string;
 };
 
 export type SshConnectResult = {

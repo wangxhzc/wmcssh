@@ -1,6 +1,9 @@
 import { FileTransferView } from "../../file-transfer/components/FileTransferView";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import { TerminalView } from "./TerminalView";
+import { reconnectTab } from "../actions";
+
+const RETRYABLE_ERRORS = new Set(["network_unreachable", "timeout", "session_closed", "session_not_found", "io_error", "unknown"]);
 
 export function TerminalPane() {
   const tabs = useTerminalStore((state) => state.tabs);
@@ -18,7 +21,13 @@ export function TerminalPane() {
           }}
         >
           {tab.kind === "terminal" ? (
-            <TerminalView tabId={tab.tabId} sessionId={tab.sessionId} active={tab.tabId === activeTabId} />
+            <>
+              <TerminalView tabId={tab.tabId} sessionId={tab.sessionId} active={tab.tabId === activeTabId} />
+              {tab.errorMessage && (tab.errorCode || tab.status === "error" || tab.status === "disconnected") ? <div className={`terminal-status-banner ${tab.status === "error" ? "error" : ""}`}>
+                <span>{tab.errorMessage}</span>
+                {(tab.status === "disconnected" || (tab.errorCode && RETRYABLE_ERRORS.has(tab.errorCode))) ? <button type="button" className="ghost-button" onClick={() => void reconnectTab(tab.tabId)}>重新连接</button> : null}
+              </div> : null}
+            </>
           ) : (
             <FileTransferView
               tabId={tab.tabId}

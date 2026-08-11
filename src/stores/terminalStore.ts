@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { HostId, SessionId, TabId } from "../types/common";
 import type { SessionStatus } from "../types/ssh";
+import type { AppErrorCode } from "../types/errors";
 
 export type TabStatus = SessionStatus | "created";
 export type WorkspaceTabKind = "terminal" | "file-transfer";
@@ -20,6 +21,7 @@ export type TerminalTab = WorkspaceTabBase & {
   sessionId?: SessionId;
   status: TabStatus;
   errorMessage?: string;
+  errorCode?: AppErrorCode;
 };
 
 export type FileTransferTab = WorkspaceTabBase & {
@@ -37,7 +39,7 @@ type TerminalStore = {
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
   bindFileTransferSession: (tabId: TabId, transferSessionId: SessionId) => void;
   replaceSession: (tabId: TabId, newSessionId: SessionId) => void;
-  setTabStatus: (tabId: TabId, status: TabStatus, errorMessage?: string) => void;
+  setTabStatus: (tabId: TabId, status: TabStatus, errorMessage?: string, errorCode?: AppErrorCode) => void;
   setActiveTab: (tabId: TabId) => void;
   markClosing: (tabId: TabId) => void;
   removeTab: (tabId: TabId) => void;
@@ -113,10 +115,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     get().bindSession(tabId, newSessionId);
   },
 
-  setTabStatus(tabId, status, errorMessage) {
+  setTabStatus(tabId, status, errorMessage, errorCode) {
     set((state) => ({
       tabs: state.tabs.map((tab) =>
-        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, status, errorMessage } : tab
+        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, status, errorMessage, errorCode } : tab
       )
     }));
   },

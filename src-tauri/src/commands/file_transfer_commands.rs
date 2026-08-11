@@ -1,11 +1,12 @@
 use crate::app_state::AppState;
 use crate::contracts::{
-    AppErrorDto, CloseFileTransferSessionInput, DownloadRemoteFileInput, DownloadRemoteFileResult,
-    DownloadRemotePathInput, DownloadRemotePathResult, ListRemoteDirectoryInput,
-    ListRemoteDirectoryResult, OpenFileTransferSessionInput, OpenFileTransferSessionResult,
-    UploadRemoteDirectoryInput, UploadRemoteFileInput,
+    AppErrorDto, CancelUploadInput, CloseFileTransferSessionInput, DownloadRemoteFileInput,
+    DownloadRemoteFileResult, DownloadRemotePathInput, DownloadRemotePathResult,
+    ListRemoteDirectoryInput, ListRemoteDirectoryResult, OpenFileTransferSessionInput,
+    OpenFileTransferSessionResult, UploadProgress, UploadRemoteDirectoryInput,
+    UploadRemoteFileInput,
 };
-use tauri::State;
+use tauri::{ipc::Channel, State};
 
 #[tauri::command]
 pub async fn ssh_open_file_transfer_session(
@@ -44,19 +45,34 @@ pub async fn ssh_list_remote_directory(
 pub async fn ssh_upload_remote_file(
     state: State<'_, AppState>,
     input: UploadRemoteFileInput,
+    on_progress: Channel<UploadProgress>,
 ) -> Result<(), AppErrorDto> {
-    state.file_transfer_service.upload_remote_file(input).await
+    state
+        .file_transfer_service
+        .upload_remote_file(input, on_progress)
+        .await
 }
 
 #[tauri::command]
 pub async fn ssh_upload_remote_directory(
     state: State<'_, AppState>,
     input: UploadRemoteDirectoryInput,
+    on_progress: Channel<UploadProgress>,
 ) -> Result<(), AppErrorDto> {
     state
         .file_transfer_service
-        .upload_remote_directory(input)
+        .upload_remote_directory(input, on_progress)
         .await
+}
+
+#[tauri::command]
+pub async fn ssh_cancel_upload(
+    state: State<'_, AppState>,
+    input: CancelUploadInput,
+) -> Result<(), AppErrorDto> {
+    state
+        .file_transfer_service
+        .cancel_upload(&input.transfer_id)
 }
 
 #[tauri::command]

@@ -16,13 +16,69 @@ use repositories::{
     host_repository::HostRepository, recent_session_repository::RecentSessionRepository,
     settings_repository::SettingsRepository,
 };
-use secrets::file_secret_store::FileSecretStore;
+use secrets::encrypted_secret_store::EncryptedSecretStore;
+use serde::{Deserialize, Serialize};
 use services::file_transfer_service::FileTransferService;
 use services::host_service::HostService;
 use services::settings_service::SettingsService;
 use ssh::session_manager::SessionManager;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Manager, PhysicalSize, WindowEvent};
+
+const WINDOW_STATE_FILE: &str = "window-state.json";
+const MIN_WINDOW_WIDTH: f64 = 1280.0;
+const MIN_WINDOW_HEIGHT: f64 = 720.0;
+
+#[derive(Deserialize, Serialize)]
+struct WindowSizeState {
+    width: f64,
+    height: f64,
+}
+
+fn restore_window_size(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(app_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let Ok(contents) = std::fs::read_to_string(app_dir.join(WINDOW_STATE_FILE)) else {
+        return;
+    };
+    let Ok(size) = serde_json::from_str::<WindowSizeState>(&contents) else {
+        return;
+    };
+
+    if size.width.is_finite() && size.height.is_finite() {
+        let _ = window.set_size(tauri::LogicalSize::new(
+            size.width.max(MIN_WINDOW_WIDTH),
+            size.height.max(MIN_WINDOW_HEIGHT),
+        ));
+    }
+}
+
+fn save_window_size(window: &tauri::Window, size: &PhysicalSize<u32>) {
+    if window.is_maximized().unwrap_or(false) {
+        return;
+    }
+    let Ok(scale_factor) = window.scale_factor() else {
+        return;
+    };
+    let Ok(app_dir) = window.app_handle().path().app_data_dir() else {
+        return;
+    };
+    if std::fs::create_dir_all(&app_dir).is_err() {
+        return;
+    }
+
+    let state = WindowSizeState {
+        width: f64::from(size.width) / scale_factor,
+        height: f64::from(size.height) / scale_factor,
+    };
+    if let Ok(contents) = serde_json::to_vec(&state) {
+        let _ = std::fs::write(app_dir.join(WINDOW_STATE_FILE), contents);
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +91,13 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            restore_window_size(app);
+            if let Some(window) = app.get_webview_window("main") {
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    let _ = window.center();
+                });
+            }
             let app_handle = app.handle().clone();
 
             tauri::async_runtime::block_on(async move {
@@ -50,7 +113,8 @@ pub fn run() {
                     .map_err(|err| anyhow::anyhow!("failed to get app data dir: {err}"))?;
                 std::fs::create_dir_all(&app_dir)?;
                 let secret_cache_path = app_dir.join("wmcssh.json");
-                let secret_store = Arc::new(FileSecretStore::new(secret_cache_path));
+                let vault = Arc::new(EncryptedSecretStore::new(db.clone(), secret_cache_path));
+                let secret_store: secrets::secret_store::DynSecretStore = vault.clone();
 
                 let host_service =
                     Arc::new(HostService::new(host_repo.clone(), secret_store.clone()));
@@ -70,6 +134,7 @@ pub fn run() {
                     recent_repo,
                     settings_service,
                     secret_store,
+                    vault,
                 };
 
                 app_handle.manage(state);
@@ -78,6 +143,11 @@ pub fn run() {
             })?;
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Resized(size) = event {
+                save_window_size(window, size);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             create_host,
@@ -91,6 +161,7 @@ pub fn run() {
             ssh_list_remote_directory,
             ssh_upload_remote_file,
             ssh_upload_remote_directory,
+            ssh_cancel_upload,
             ssh_download_remote_file,
             ssh_download_remote_path,
             ssh_connect,
@@ -102,6 +173,10 @@ pub fn run() {
             reset_terminal_settings,
             list_recent_sessions,
             get_app_info,
+            get_vault_status,
+            initialize_vault,
+            unlock_vault,
+            lock_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

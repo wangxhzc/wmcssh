@@ -1,4 +1,5 @@
 use crate::repositories::recent_session_repository::RecentSessionRepository;
+use crate::secrets::encrypted_secret_store::EncryptedSecretStore;
 use crate::secrets::secret_store::DynSecretStore;
 use crate::services::file_transfer_service::FileTransferService;
 use crate::services::host_service::HostService;
@@ -16,4 +17,5 @@ pub struct AppState {
     pub recent_repo: Arc<RecentSessionRepository>,
     pub settings_service: Arc<SettingsService>,
     pub secret_store: DynSecretStore,
+    pub vault: Arc<EncryptedSecretStore>,
 }

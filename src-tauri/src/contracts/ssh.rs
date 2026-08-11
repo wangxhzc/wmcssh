@@ -1,4 +1,4 @@
-use crate::contracts::{AppErrorDto, EpochMillis, HostId, SessionId};
+use crate::contracts::{AppErrorDto, AuthType, EpochMillis, HostId, SessionId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +18,11 @@ pub struct SshConnectInput {
     pub host_id: HostId,
     pub initial_cols: u16,
     pub initial_rows: u16,
+    pub username: Option<String>,
+    pub auth_type: Option<AuthType>,
+    pub password: Option<String>,
+    pub private_key_path: Option<String>,
+    pub private_key_passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

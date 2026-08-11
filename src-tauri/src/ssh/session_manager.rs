@@ -38,7 +38,16 @@ impl SessionManager {
         let session_id = new_id();
         let config = self
             .host_service
-            .build_connect_config(&input.host_id, input.initial_cols, input.initial_rows)
+            .build_connect_config_with_credentials(
+                &input.host_id,
+                input.initial_cols,
+                input.initial_rows,
+                input.username,
+                input.auth_type,
+                input.password,
+                input.private_key_path,
+                input.private_key_passphrase,
+            )
             .await?;
 
         let (command_tx, command_rx) = std::sync::mpsc::channel::<SessionCommand>();

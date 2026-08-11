@@ -63,7 +63,7 @@ function hostToFormState(host: HostDto): FormState {
 
 function buildCreateInput(form: FormState): CreateHostInput {
   const input: CreateHostInput = {
-    name: form.name.trim(),
+    name: form.name.trim() || form.hostname.trim(),
     hostname: form.hostname.trim(),
     port: Number(form.port),
     username: form.username.trim(),
@@ -73,9 +73,9 @@ function buildCreateInput(form: FormState): CreateHostInput {
   };
 
   if (form.authType === "password") {
-    input.password = form.password;
+    if (form.password) input.password = form.password;
   } else {
-    input.privateKeyPath = form.privateKeyPath.trim();
+    if (form.privateKeyPath.trim()) input.privateKeyPath = form.privateKeyPath.trim();
     if (form.privateKeyPassphrase.trim()) {
       input.privateKeyPassphrase = form.privateKeyPassphrase;
     }
@@ -107,9 +107,7 @@ function buildUpdateInput(form: FormState): UpdateHostInput {
 }
 
 function validateForm(form: FormState): string | undefined {
-  if (!form.name.trim()) return "请输入主机名称";
   if (!form.hostname.trim()) return "请输入主机地址";
-  if (!form.username.trim()) return "请输入用户名";
 
   const port = Number(form.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return "端口必须在 1 到 65535 之间";
@@ -119,9 +117,6 @@ function validateForm(form: FormState): string | undefined {
 
   const keepalive = Number(form.keepaliveIntervalSecs);
   if (!Number.isInteger(keepalive) || keepalive < 0) return "保活间隔不能小于 0";
-
-  if (form.authType === "password" && !form.password) return "密码登录需要填写密码";
-  if (form.authType === "private_key" && !form.privateKeyPath.trim()) return "私钥登录需要填写私钥路径";
 
   return undefined;
 }

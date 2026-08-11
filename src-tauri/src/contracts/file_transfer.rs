@@ -57,10 +57,11 @@ pub struct ListRemoteDirectoryResult {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadRemoteFileInput {
+    pub transfer_id: String,
     pub transfer_session_id: SessionId,
     pub remote_dir_path: String,
     pub file_name: String,
-    pub content_base64: String,
+    pub local_file_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -72,12 +73,37 @@ pub struct RemoteDirectoryFilePayload {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UploadRemoteDirectoryFilePayload {
+    pub relative_path: String,
+    pub local_file_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UploadRemoteDirectoryInput {
+    pub transfer_id: String,
     pub transfer_session_id: SessionId,
     pub remote_dir_path: String,
     pub directory_name: String,
     pub directories: Vec<String>,
-    pub files: Vec<RemoteDirectoryFilePayload>,
+    pub files: Vec<UploadRemoteDirectoryFilePayload>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelUploadInput {
+    pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadProgress {
+    pub transfer_id: String,
+    pub uploaded_bytes: u64,
+    pub total_bytes: u64,
+    pub current_file: String,
+    pub completed_files: usize,
+    pub total_files: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]

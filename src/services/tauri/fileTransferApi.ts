@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   DownloadRemoteFileInput,
   DownloadRemoteFileResult,
@@ -10,7 +10,8 @@ import type {
   OpenFileTransferSessionInput,
   OpenFileTransferSessionResult,
   UploadRemoteDirectoryInput,
-  UploadRemoteFileInput
+  UploadRemoteFileInput,
+  UploadProgress
 } from "../../types/fileTransfer";
 import { normalizeAppError } from "../../types/errors";
 
@@ -42,20 +43,25 @@ export async function listRemoteDirectory(
   }
 }
 
-export async function uploadRemoteFile(input: UploadRemoteFileInput): Promise<void> {
+export async function uploadRemoteFile(input: UploadRemoteFileInput, onProgress: Channel<UploadProgress>): Promise<void> {
   try {
-    await invoke("ssh_upload_remote_file", { input });
+    await invoke("ssh_upload_remote_file", { input, onProgress });
   } catch (error) {
     throw normalizeAppError(error);
   }
 }
 
-export async function uploadRemoteDirectory(input: UploadRemoteDirectoryInput): Promise<void> {
+export async function uploadRemoteDirectory(input: UploadRemoteDirectoryInput, onProgress: Channel<UploadProgress>): Promise<void> {
   try {
-    await invoke("ssh_upload_remote_directory", { input });
+    await invoke("ssh_upload_remote_directory", { input, onProgress });
   } catch (error) {
     throw normalizeAppError(error);
   }
+}
+
+export async function cancelUpload(transferId: string): Promise<void> {
+  try { await invoke("ssh_cancel_upload", { input: { transferId } }); }
+  catch (error) { throw normalizeAppError(error); }
 }
 
 export async function downloadRemoteFile(

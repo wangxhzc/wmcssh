@@ -1,11 +1,14 @@
-import { useEffect } from "react";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "../features/layout/components/AppShell";
 import { useTerminalEvents } from "../features/terminal/hooks/useTerminalEvents";
 import { useHostStore } from "../stores/hostStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { ConnectionCredentialsDialog } from "../features/hosts/components/ConnectionCredentialsDialog";
+import { VaultUnlockDialog } from "../features/vault/VaultUnlockDialog";
 
 export function App() {
+  const [vaultUnlocked, setVaultUnlocked] = useState(false);
+  const handleVaultUnlocked = useCallback(() => setVaultUnlocked(true), []);
   useTerminalEvents();
   const loadHosts = useHostStore((state) => state.loadHosts);
   const loadTerminalSettings = useSettingsStore((state) => state.loadTerminalSettings);
@@ -23,20 +26,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const resizeWindow = async () => {
-      try {
-        const appWindow = getCurrentWindow();
-        await appWindow.setSize(new LogicalSize(1360, 780));
-        await appWindow.setMinSize(new LogicalSize(1280, 720));
-      } catch (error) {
-        console.debug("[wmcssh][window] failed to apply default size", error);
-      }
-    };
-
-    void resizeWindow();
-  }, []);
-
-  useEffect(() => {
     void loadHosts();
   }, [loadHosts]);
 
@@ -44,5 +33,5 @@ export function App() {
     void loadTerminalSettings();
   }, [loadTerminalSettings]);
 
-  return <AppShell />;
+  return <><AppShell /><ConnectionCredentialsDialog />{!vaultUnlocked ? <VaultUnlockDialog onUnlocked={handleVaultUnlocked} /> : null}</>;
 }

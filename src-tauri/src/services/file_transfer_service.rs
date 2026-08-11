@@ -3,16 +3,22 @@ use crate::contracts::{
     DownloadRemoteFileResult, DownloadRemotePathInput, DownloadRemotePathResult,
     ListRemoteDirectoryInput, ListRemoteDirectoryResult, OpenFileTransferSessionInput,
     OpenFileTransferSessionResult, RemoteDirectoryFilePayload, RemoteFileEntry,
-    RemoteFileEntryType, UploadRemoteDirectoryInput, UploadRemoteFileInput,
+    RemoteFileEntryType, UploadProgress, UploadRemoteDirectoryFilePayload,
+    UploadRemoteDirectoryInput, UploadRemoteFileInput,
 };
 use crate::services::host_service::HostService;
 use crate::ssh::client::connect_ssh_session;
-use crate::utils::base64::{decode_base64, encode_base64};
+use crate::utils::base64::encode_base64;
 use crate::utils::ids::new_id;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
+use tauri::ipc::Channel;
 
 const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
@@ -21,10 +27,13 @@ const ROOT_PATH: &str = "/";
 const MAX_DIRECTORY_FILE_COUNT: usize = 1000;
 const MAX_DIRECTORY_DEPTH: usize = 10;
 const DIRECTORY_LIMIT_MESSAGE: &str = "文件数量过多请打包后上传或下载";
+const UPLOAD_BUFFER_SIZE: usize = 256 * 1024;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct FileTransferService {
     host_service: Arc<HostService>,
     sessions: Mutex<HashMap<String, FileTransferSession>>,
+    cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 struct FileTransferSession {
@@ -38,6 +47,7 @@ impl FileTransferService {
         Self {
             host_service,
             sessions: Mutex::new(HashMap::new()),
+            cancellations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -141,6 +151,19 @@ impl FileTransferService {
     pub async fn upload_remote_file(
         &self,
         input: UploadRemoteFileInput,
+        on_progress: Channel<UploadProgress>,
+    ) -> Result<(), AppErrorDto> {
+        let cancel = self.register_upload(&input.transfer_id)?;
+        let result = self.upload_remote_file_inner(&input, &on_progress, &cancel);
+        self.finish_upload(&input.transfer_id);
+        result
+    }
+
+    fn upload_remote_file_inner(
+        &self,
+        input: &UploadRemoteFileInput,
+        on_progress: &Channel<UploadProgress>,
+        cancel: &AtomicBool,
     ) -> Result<(), AppErrorDto> {
         let sessions = self
             .sessions
@@ -153,8 +176,16 @@ impl FileTransferService {
 
         let remote_dir_path = normalize_remote_path(&input.remote_dir_path);
         let remote_file_path = join_remote_path(&remote_dir_path, &input.file_name);
-        let content = decode_base64(&input.content_base64)?;
-        let mut file = sftp.create(Path::new(&remote_file_path)).map_err(|err| {
+        let mut local_file = std::fs::File::open(&input.local_file_path).map_err(|err| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                format!("Failed to open local file {}", input.local_file_path),
+                err.to_string(),
+                true,
+            )
+        })?;
+        let total_bytes = local_file.metadata().map_err(AppErrorDto::io)?.len();
+        let mut remote_file = sftp.create(Path::new(&remote_file_path)).map_err(|err| {
             AppErrorDto::with_details(
                 AppErrorCode::IoError,
                 format!("Failed to create remote file {remote_file_path}"),
@@ -163,14 +194,22 @@ impl FileTransferService {
             )
         })?;
 
-        file.write_all(&content).map_err(|err| {
-            AppErrorDto::with_details(
-                AppErrorCode::IoError,
-                format!("Failed to upload remote file {remote_file_path}"),
-                err.to_string(),
-                true,
-            )
-        })?;
+        let result = copy_with_progress(
+            &mut local_file,
+            &mut remote_file,
+            cancel,
+            on_progress,
+            &input.transfer_id,
+            total_bytes,
+            &input.file_name,
+            0,
+            1,
+            0,
+        );
+        if result.is_err() {
+            let _ = sftp.unlink(Path::new(&remote_file_path));
+        }
+        result?;
 
         Ok(())
     }
@@ -178,55 +217,125 @@ impl FileTransferService {
     pub async fn upload_remote_directory(
         &self,
         input: UploadRemoteDirectoryInput,
+        on_progress: Channel<UploadProgress>,
     ) -> Result<(), AppErrorDto> {
         validate_directory_payload(&input.directory_name, &input.directories, &input.files)?;
+        let cancel = self.register_upload(&input.transfer_id)?;
+        let result = self.upload_remote_directory_inner(input, &on_progress, &cancel);
+        self.finish_upload(&result.1);
+        result.0
+    }
 
-        let sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| file_transfer_sessions_lock_error())?;
-        let transfer_session = sessions
-            .get(&input.transfer_session_id)
-            .ok_or_else(AppErrorDto::session_not_found)?;
-        let sftp = &transfer_session.sftp;
+    fn upload_remote_directory_inner(
+        &self,
+        input: UploadRemoteDirectoryInput,
+        on_progress: &Channel<UploadProgress>,
+        cancel: &AtomicBool,
+    ) -> (Result<(), AppErrorDto>, String) {
+        let transfer_id = input.transfer_id.clone();
+        let result = (|| {
+            let total_bytes = input.files.iter().try_fold(0u64, |total, file| {
+                std::fs::metadata(&file.local_file_path)
+                    .map(|meta| total.saturating_add(meta.len()))
+                    .map_err(AppErrorDto::io)
+            })?;
+            let total_files = input.files.len();
 
-        let remote_dir_path = normalize_remote_path(&input.remote_dir_path);
-        let remote_root_path = join_remote_path(&remote_dir_path, &input.directory_name);
-        ensure_remote_directory(&sftp, &remote_root_path)?;
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| file_transfer_sessions_lock_error())?;
+            let transfer_session = sessions
+                .get(&input.transfer_session_id)
+                .ok_or_else(AppErrorDto::session_not_found)?;
+            let sftp = &transfer_session.sftp;
 
-        let mut directories = input.directories;
-        directories.sort_by_key(|path| relative_depth(path));
-        for directory in directories {
-            ensure_remote_directory(&sftp, &join_remote_path(&remote_root_path, &directory))?;
-        }
+            let remote_dir_path = normalize_remote_path(&input.remote_dir_path);
+            let remote_root_path = join_remote_path(&remote_dir_path, &input.directory_name);
+            ensure_remote_directory(&sftp, &remote_root_path)?;
 
-        for file_payload in input.files {
-            let remote_file_path = join_remote_path(&remote_root_path, &file_payload.relative_path);
-            if let Some(parent) = remote_parent_path(&remote_file_path) {
-                ensure_remote_directory(&sftp, &parent)?;
+            let mut directories = input.directories;
+            directories.sort_by_key(|path| relative_depth(path));
+            for directory in directories {
+                check_cancelled(cancel)?;
+                ensure_remote_directory(&sftp, &join_remote_path(&remote_root_path, &directory))?;
             }
 
-            let content = decode_base64(&file_payload.content_base64)?;
-            let mut file = sftp.create(Path::new(&remote_file_path)).map_err(|err| {
-                AppErrorDto::with_details(
-                    AppErrorCode::IoError,
-                    format!("Failed to create remote file {remote_file_path}"),
-                    err.to_string(),
-                    true,
-                )
-            })?;
+            let mut uploaded_bytes = 0u64;
+            for (index, file_payload) in input.files.into_iter().enumerate() {
+                check_cancelled(cancel)?;
+                let remote_file_path =
+                    join_remote_path(&remote_root_path, &file_payload.relative_path);
+                if let Some(parent) = remote_parent_path(&remote_file_path) {
+                    ensure_remote_directory(&sftp, &parent)?;
+                }
 
-            file.write_all(&content).map_err(|err| {
-                AppErrorDto::with_details(
-                    AppErrorCode::IoError,
-                    format!("Failed to upload remote file {remote_file_path}"),
-                    err.to_string(),
-                    true,
-                )
-            })?;
+                let mut local_file =
+                    std::fs::File::open(&file_payload.local_file_path).map_err(|err| {
+                        AppErrorDto::with_details(
+                            AppErrorCode::IoError,
+                            format!("Failed to open local file {}", file_payload.local_file_path),
+                            err.to_string(),
+                            true,
+                        )
+                    })?;
+                let mut remote_file = sftp.create(Path::new(&remote_file_path)).map_err(|err| {
+                    AppErrorDto::with_details(
+                        AppErrorCode::IoError,
+                        format!("Failed to create remote file {remote_file_path}"),
+                        err.to_string(),
+                        true,
+                    )
+                })?;
+
+                let result = copy_with_progress(
+                    &mut local_file,
+                    &mut remote_file,
+                    cancel,
+                    on_progress,
+                    &input.transfer_id,
+                    total_bytes,
+                    &file_payload.relative_path,
+                    index,
+                    total_files,
+                    uploaded_bytes,
+                );
+                if result.is_err() {
+                    let _ = sftp.unlink(Path::new(&remote_file_path));
+                }
+                uploaded_bytes = result?;
+            }
+
+            Ok(())
+        })();
+        (result, transfer_id)
+    }
+
+    pub fn cancel_upload(&self, transfer_id: &str) -> Result<(), AppErrorDto> {
+        if let Some(flag) = self
+            .cancellations
+            .lock()
+            .map_err(|_| file_transfer_sessions_lock_error())?
+            .get(transfer_id)
+        {
+            flag.store(true, Ordering::Relaxed);
         }
-
         Ok(())
+    }
+
+    fn register_upload(&self, transfer_id: &str) -> Result<Arc<AtomicBool>, AppErrorDto> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.cancellations
+            .lock()
+            .map_err(|_| file_transfer_sessions_lock_error())?
+            .insert(transfer_id.to_string(), flag.clone());
+        Ok(flag)
+    }
+
+    fn finish_upload(&self, transfer_id: &str) {
+        if let Ok(mut uploads) = self.cancellations.lock() {
+            uploads.remove(transfer_id);
+        }
     }
 
     pub async fn download_remote_file(
@@ -433,7 +542,7 @@ fn ensure_remote_directory(sftp: &ssh2::Sftp, path: &str) -> Result<(), AppError
 fn validate_directory_payload(
     directory_name: &str,
     directories: &[String],
-    files: &[RemoteDirectoryFilePayload],
+    files: &[UploadRemoteDirectoryFilePayload],
 ) -> Result<(), AppErrorDto> {
     if directory_name.trim().is_empty()
         || directory_name.contains('/')
@@ -464,6 +573,100 @@ fn validate_directory_payload(
     }
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_with_progress(
+    local_file: &mut std::fs::File,
+    remote_file: &mut ssh2::File,
+    cancel: &AtomicBool,
+    on_progress: &Channel<UploadProgress>,
+    transfer_id: &str,
+    total_bytes: u64,
+    current_file: &str,
+    completed_files: usize,
+    total_files: usize,
+    initial_uploaded_bytes: u64,
+) -> Result<u64, AppErrorDto> {
+    let mut buffer = vec![0u8; UPLOAD_BUFFER_SIZE];
+    let mut uploaded_bytes = initial_uploaded_bytes;
+    let mut last_report = Instant::now() - PROGRESS_INTERVAL;
+    emit_upload_progress(
+        on_progress,
+        transfer_id,
+        uploaded_bytes,
+        total_bytes,
+        current_file,
+        completed_files,
+        total_files,
+    );
+
+    loop {
+        check_cancelled(cancel)?;
+        let count = local_file.read(&mut buffer).map_err(AppErrorDto::io)?;
+        if count == 0 {
+            break;
+        }
+        remote_file.write_all(&buffer[..count]).map_err(|err| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                format!("Failed to upload {current_file}"),
+                err.to_string(),
+                true,
+            )
+        })?;
+        uploaded_bytes = uploaded_bytes.saturating_add(count as u64);
+        if last_report.elapsed() >= PROGRESS_INTERVAL {
+            emit_upload_progress(
+                on_progress,
+                transfer_id,
+                uploaded_bytes,
+                total_bytes,
+                current_file,
+                completed_files,
+                total_files,
+            );
+            last_report = Instant::now();
+        }
+    }
+
+    emit_upload_progress(
+        on_progress,
+        transfer_id,
+        uploaded_bytes,
+        total_bytes,
+        current_file,
+        completed_files + 1,
+        total_files,
+    );
+    Ok(uploaded_bytes)
+}
+
+fn emit_upload_progress(
+    channel: &Channel<UploadProgress>,
+    transfer_id: &str,
+    uploaded_bytes: u64,
+    total_bytes: u64,
+    current_file: &str,
+    completed_files: usize,
+    total_files: usize,
+) {
+    let _ = channel.send(UploadProgress {
+        transfer_id: transfer_id.to_string(),
+        uploaded_bytes,
+        total_bytes,
+        current_file: current_file.to_string(),
+        completed_files,
+        total_files,
+    });
+}
+
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), AppErrorDto> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(AppErrorDto::new(AppErrorCode::IoError, "上传已取消", false))
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_relative_path(path: &str) -> Result<(), AppErrorDto> {

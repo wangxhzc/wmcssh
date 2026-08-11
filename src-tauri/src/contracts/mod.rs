@@ -5,6 +5,7 @@ pub mod host;
 pub mod recent;
 pub mod settings;
 pub mod ssh;
+pub mod vault;
 
 pub use common::*;
 pub use errors::*;
@@ -13,3 +14,4 @@ pub use host::*;
 pub use recent::*;
 pub use settings::*;
 pub use ssh::*;
+pub use vault::*;

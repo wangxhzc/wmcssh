@@ -143,10 +143,22 @@ fn run_session_worker_inner(
     emit_status(app, input, SessionStatus::Connected, Some("Connected"));
 
     if let Some(command) = input.config.startup_command.clone() {
-        write_channel_all(input, &mut channel, command.as_bytes())
-            .map_err(|err| AppErrorDto::with_details(AppErrorCode::IoError, "Failed to write startup command", err.to_string(), true))?;
-        write_channel_all(input, &mut channel, b"\n")
-            .map_err(|err| AppErrorDto::with_details(AppErrorCode::IoError, "Failed to write startup command newline", err.to_string(), true))?;
+        write_channel_all(input, &mut channel, command.as_bytes()).map_err(|err| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                "Failed to write startup command",
+                err.to_string(),
+                true,
+            )
+        })?;
+        write_channel_all(input, &mut channel, b"\n").map_err(|err| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                "Failed to write startup command newline",
+                err.to_string(),
+                true,
+            )
+        })?;
     }
 
     let mut buf = [0u8; 32768];
@@ -243,7 +255,11 @@ fn run_session_worker_inner(
                 }
 
                 if transient_read_errors >= MAX_TRANSIENT_READ_ERRORS {
-                    crate::app_log!("[ssh-worker][{}] fatal transport read error: {}", input.session_id, err);
+                    crate::app_log!(
+                        "[ssh-worker][{}] fatal transport read error: {}",
+                        input.session_id,
+                        err
+                    );
                     update_recent_session(
                         &input.recent_repo,
                         &input.session_id,
@@ -305,7 +321,11 @@ fn run_session_worker_inner(
                 }
             }
             Err(err) => {
-                crate::app_log!("[ssh-worker][{}] fatal read error: {}", input.session_id, err);
+                crate::app_log!(
+                    "[ssh-worker][{}] fatal read error: {}",
+                    input.session_id,
+                    err
+                );
                 update_recent_session(
                     &input.recent_repo,
                     &input.session_id,
@@ -339,12 +359,7 @@ fn handle_command(
 ) -> Result<bool, AppErrorDto> {
     match command {
         SessionCommand::Write(data) => {
-            enqueue_pending_input(
-                input,
-                pending_input,
-                pending_input_bytes,
-                data,
-            )?;
+            enqueue_pending_input(input, pending_input, pending_input_bytes, data)?;
         }
         SessionCommand::Resize { cols, rows } => {
             request_pty_size_with_retry(channel, cols, rows, &input.session_id)?;
@@ -392,10 +407,22 @@ fn wait_for_command(
     }
 
     match input.command_rx.recv_timeout(idle_wait) {
-        Ok(command) => return handle_command(app, input, channel, command, pending_input, pending_input_bytes),
+        Ok(command) => {
+            return handle_command(
+                app,
+                input,
+                channel,
+                command,
+                pending_input,
+                pending_input_bytes,
+            )
+        }
         Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {
-            crate::app_log!("[ssh-worker][{}] command channel disconnected", input.session_id);
+        Err(RecvTimeoutError::Disconnected) => {
+            crate::app_log!(
+                "[ssh-worker][{}] command channel disconnected",
+                input.session_id
+            );
             *command_rx_closed = true;
             std::thread::sleep(idle_wait);
         }
@@ -445,12 +472,14 @@ fn drain_channel_output(
             Err(err) if is_retryable_io_error(&err) || is_transport_read_error(&err) => {
                 return Ok(false)
             }
-            Err(err) => return Err(AppErrorDto::with_details(
-                AppErrorCode::IoError,
-                "Failed while draining SSH output",
-                err.to_string(),
-                true,
-            )),
+            Err(err) => {
+                return Err(AppErrorDto::with_details(
+                    AppErrorCode::IoError,
+                    "Failed while draining SSH output",
+                    err.to_string(),
+                    true,
+                ))
+            }
         }
     }
 }
@@ -498,7 +527,8 @@ fn process_pending_input_step(
         }
         WriteStep::Pending(remaining) => {
             if remaining.len() < current.len() {
-                *pending_input_bytes = pending_input_bytes.saturating_sub(current.len() - remaining.len());
+                *pending_input_bytes =
+                    pending_input_bytes.saturating_sub(current.len() - remaining.len());
             }
             pending_input.push_front(remaining);
             let _ = drain_channel_output(input, channel)?;

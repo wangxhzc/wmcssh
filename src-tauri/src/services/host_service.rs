@@ -29,8 +29,6 @@ impl HostService {
             input.port,
             &input.auth_type,
         )?;
-        self.validate_create_auth(&input)?;
-
         let host_id = new_id();
         let now = now_millis();
         let (password_ref, passphrase_ref) = self.persist_create_secrets(&host_id, &input).await?;
@@ -104,17 +102,6 @@ impl HostService {
             .unwrap_or(current.keepalive_interval_secs as u64);
 
         self.validate_host_input(&name, &hostname, &username, port, &auth_type)?;
-
-        let final_private_key_path = input
-            .private_key_path
-            .clone()
-            .or(current.private_key_path.clone());
-        self.validate_update_auth(
-            &auth_type,
-            current.password_ref.as_ref(),
-            &input.password,
-            final_private_key_path.as_ref(),
-        )?;
 
         let mut secrets_to_delete = Vec::new();
         let password_ref = match input.password {
@@ -329,32 +316,92 @@ impl HostService {
         })
     }
 
-    fn validate_host_input(
+    pub async fn build_connect_config_with_credentials(
         &self,
-        name: &str,
-        hostname: &str,
-        username: &str,
-        port: u16,
-        auth_type: &AuthType,
-    ) -> Result<(), AppErrorDto> {
-        if name.trim().is_empty() {
-            return Err(AppErrorDto::new(
-                AppErrorCode::HostInvalid,
-                "Host name is required",
-                false,
-            ));
+        host_id: &str,
+        initial_cols: u16,
+        initial_rows: u16,
+        username: Option<String>,
+        auth_type: Option<AuthType>,
+        password: Option<String>,
+        private_key_path: Option<String>,
+        private_key_passphrase: Option<String>,
+    ) -> Result<ConnectConfig, AppErrorDto> {
+        if username.is_none() && auth_type.is_none() {
+            return self
+                .build_connect_config(host_id, initial_cols, initial_rows)
+                .await;
         }
-        if hostname.trim().is_empty() {
-            return Err(AppErrorDto::new(
-                AppErrorCode::HostInvalid,
-                "Hostname is required",
-                false,
-            ));
-        }
+
+        let host = self.host_repo.get_host(host_id).await?;
+        let username = username.unwrap_or(host.username);
         if username.trim().is_empty() {
             return Err(AppErrorDto::new(
                 AppErrorCode::HostInvalid,
                 "Username is required",
+                false,
+            ));
+        }
+        let auth_type = auth_type.unwrap_or(parse_auth_type(&host.auth_type)?);
+        let auth = match auth_type {
+            AuthType::Password => AuthConfig::Password {
+                password: match password {
+                    Some(value) => value,
+                    None => {
+                        let key = host.password_ref.ok_or_else(|| {
+                            AppErrorDto::new(
+                                AppErrorCode::SecretNotFound,
+                                "Password is required",
+                                false,
+                            )
+                        })?;
+                        self.secret_store.get_secret(&key).await?
+                    }
+                },
+            },
+            AuthType::PrivateKey => AuthConfig::PrivateKey {
+                private_key_path: private_key_path.or(host.private_key_path).ok_or_else(|| {
+                    AppErrorDto::new(
+                        AppErrorCode::HostInvalid,
+                        "Private key path is required",
+                        false,
+                    )
+                })?,
+                passphrase: match private_key_passphrase {
+                    Some(value) => Some(value),
+                    None => match host.passphrase_ref {
+                        Some(key) => Some(self.secret_store.get_secret(&key).await?),
+                        None => None,
+                    },
+                },
+            },
+        };
+        Ok(ConnectConfig {
+            host_id: host.id,
+            hostname: host.hostname,
+            port: host.port as u16,
+            username,
+            auth,
+            connect_timeout_ms: host.connect_timeout_ms as u64,
+            keepalive_interval_secs: host.keepalive_interval_secs as u64,
+            initial_cols,
+            initial_rows,
+            startup_command: host.startup_command,
+        })
+    }
+
+    fn validate_host_input(
+        &self,
+        _name: &str,
+        hostname: &str,
+        _username: &str,
+        port: u16,
+        auth_type: &AuthType,
+    ) -> Result<(), AppErrorDto> {
+        if hostname.trim().is_empty() {
+            return Err(AppErrorDto::new(
+                AppErrorCode::HostInvalid,
+                "Hostname is required",
                 false,
             ));
         }
@@ -369,65 +416,6 @@ impl HostService {
             AuthType::Password => Ok(()),
             AuthType::PrivateKey => Ok(()),
         }
-    }
-
-    fn validate_create_auth(&self, input: &CreateHostInput) -> Result<(), AppErrorDto> {
-        match input.auth_type {
-            AuthType::Password => {
-                if is_blank(input.password.as_deref()) {
-                    return Err(AppErrorDto::new(
-                        AppErrorCode::HostInvalid,
-                        "Password is required for password auth",
-                        false,
-                    ));
-                }
-            }
-            AuthType::PrivateKey => {
-                if is_blank(input.private_key_path.as_deref()) {
-                    return Err(AppErrorDto::new(
-                        AppErrorCode::HostInvalid,
-                        "Private key path is required for private key auth",
-                        false,
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_update_auth(
-        &self,
-        auth_type: &AuthType,
-        current_password_ref: Option<&String>,
-        password_update: &Option<SecretUpdate>,
-        effective_private_key_path: Option<&String>,
-    ) -> Result<(), AppErrorDto> {
-        match auth_type {
-            AuthType::Password => {
-                let has_password = match password_update {
-                    Some(SecretUpdate::Clear) => false,
-                    Some(SecretUpdate::Replace(_)) => true,
-                    Some(SecretUpdate::Keep) | None => current_password_ref.is_some(),
-                };
-                if !has_password {
-                    return Err(AppErrorDto::new(
-                        AppErrorCode::HostInvalid,
-                        "Password is required for password auth",
-                        false,
-                    ));
-                }
-            }
-            AuthType::PrivateKey => {
-                if is_blank(effective_private_key_path.map(String::as_str)) {
-                    return Err(AppErrorDto::new(
-                        AppErrorCode::HostInvalid,
-                        "Private key path is required for private key auth",
-                        false,
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 
     async fn persist_create_secrets(
@@ -473,8 +461,4 @@ fn parse_auth_type(value: &str) -> Result<AuthType, AppErrorDto> {
             false,
         )),
     }
-}
-
-fn is_blank(value: Option<&str>) -> bool {
-    value.map(|text| text.trim().is_empty()).unwrap_or(true)
 }
