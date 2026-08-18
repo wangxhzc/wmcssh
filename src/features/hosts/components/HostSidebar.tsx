@@ -38,6 +38,28 @@ export function HostSidebar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!hostMenu) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (hostMenuRef.current?.contains(event.target as Node | null)) return;
+      setHostMenu(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHostMenu(null);
+    };
+    const handleWindowBlur = () => setHostMenu(null);
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [hostMenu]);
+
   const clearStatusMessage = () => {
     if (statusTimerRef.current !== undefined) {
       window.clearTimeout(statusTimerRef.current);

@@ -69,21 +69,32 @@ body,
 }
 
 :root {
-  --app-bg: #1e1e2e;
-  --sidebar-bg: #181825;
-  --panel-bg: #181825;
-  --panel-bg-2: #313244;
-  --panel-bg-3: #45475a;
-  --selection-bg: #45475a;
-  --border: #313244;
-  --border-strong: #585b70;
-  --accent: #89b4fa;
-  --text: #cdd6f4;
-  --muted: #a6adc8;
+  --app-bg: #1c1c1c;
+  --sidebar-bg: #181818;
+  --panel-bg: #181818;
+  --panel-bg-2: #242424;
+  --panel-bg-3: #292929;
+  --hover-bg: #292929;
+  --selection-bg: #303030;
+  --border: #333333;
+  --border-strong: #333333;
+  --accent: #7aa2d6;
+  --success: #81b29a;
+  --warning: #d0ad78;
+  --error: #c97b7b;
+  --text: #e4e4e4;
+  --muted: #a0a0a0;
+  --weak: #6f6f6f;
 }
 
 button {
   font: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--weak);
+  opacity: 1;
 }
 
 .app-frame {
@@ -131,7 +142,7 @@ button {
 
 .sidebar-header p {
   margin: 4px 0 10px;
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -161,7 +172,7 @@ button {
   padding: 8px 10px;
   padding-right: 32px;
   background: var(--panel-bg-2);
-  color: #e5e7eb;
+  color: var(--text);
   outline: none;
 }
 
@@ -170,8 +181,8 @@ button {
   -webkit-appearance: none;
   -moz-appearance: none;
   color-scheme: dark;
-  background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%),
-    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-position:
     calc(100% - 16px) calc(50% - 2px),
     calc(100% - 10px) calc(50% - 2px);
@@ -182,8 +193,8 @@ button {
 .search-input:focus,
 .field input:focus,
 .field select:focus {
-  border-color: #60a5fa;
-  box-shadow: 0 0 0 3px rgb(96 165 250 / 12%);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(122 162 214 / 12%);
 }
 
 .primary-button,
@@ -198,20 +209,20 @@ button {
 }
 
 .primary-button {
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
-  color: white;
+  background: var(--accent);
+  color: var(--sidebar-bg);
 }
 
 .ghost-button {
   background: var(--panel-bg-2);
   border-color: var(--border);
-  color: #e5e7eb;
+  color: var(--text);
 }
 
 .danger-button {
-  background: #2b1114;
-  border-color: #7f1d1d;
-  color: #fecaca;
+  background: color-mix(in srgb, var(--error) 14%, var(--panel-bg-2));
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .icon-button {
@@ -220,7 +231,7 @@ button {
   padding: 0;
   border-color: var(--border);
   background: var(--panel-bg-2);
-  color: #e5e7eb;
+  color: var(--text);
 }
 
 .primary-button:hover,
@@ -251,7 +262,7 @@ button {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-bg-2);
-  color: #e5e7eb;
+  color: var(--text);
   cursor: pointer;
 }
 
@@ -312,15 +323,15 @@ button {
   padding: 0 8px;
   gap: 5px;
   border: 0;
-  color: #d1d5db;
+  color: var(--muted);
   background: transparent;
   cursor: pointer;
 }
 
 .tab-item.active {
-  background: #5a5a5a;
-  border-bottom: 2px solid #93c5fd;
-  color: white;
+  background: var(--selection-bg);
+  border-bottom: 2px solid var(--accent);
+  color: var(--text);
 }
 
 .tab-status-dot {
@@ -331,31 +342,31 @@ button {
 }
 
 .tab-status-dot.created {
-  background: #64748b;
+  background: var(--weak);
 }
 
 .tab-status-dot.connecting {
-  background: #f59e0b;
+  background: var(--warning);
 }
 
 .tab-status-dot.connected {
-  background: #22c55e;
+  background: var(--success);
 }
 
 .tab-status-dot.reconnecting {
-  background: #eab308;
+  background: var(--warning);
 }
 
 .tab-status-dot.disconnected {
-  background: #ef4444;
+  background: var(--error);
 }
 
 .tab-status-dot.closing {
-  background: #94a3b8;
+  background: var(--weak);
 }
 
 .tab-status-dot.error {
-  background: #dc2626;
+  background: var(--error);
 }
 
 .tab-close {
@@ -373,10 +384,8 @@ button {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(circle at top right, rgb(120 120 120 / 0.35), transparent 28%),
-    linear-gradient(180deg, #333, #3b3b3b 45%, #333);
-  color: #e5e7eb;
+  background: var(--app-bg);
+  color: var(--text);
 }
 
 .file-transfer-toolbar {
@@ -393,8 +402,8 @@ button {
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgb(60 60 60 / 0.9);
-  color: #cbd5e1;
+  background: var(--panel-bg-2);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -406,8 +415,8 @@ button {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgb(60 60 60 / 0.88);
-  color: #cbd5e1;
+  background: var(--panel-bg-2);
+  color: var(--muted);
 }
 
 .upload-progress-panel {
@@ -415,10 +424,10 @@ button {
   gap: 7px;
   margin: 0 12px 8px;
   padding: 9px 11px;
-  border: 1px solid #315778;
+  border: 1px solid var(--accent);
   border-radius: 9px;
-  background: rgb(24 43 60 / 92%);
-  color: #dbeafe;
+  background: var(--panel-bg-2);
+  color: var(--text);
   font-size: 12px;
 }
 
@@ -442,18 +451,18 @@ button {
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: #17202b;
+  background: var(--sidebar-bg);
 }
 
 .upload-progress-fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #3b82f6, #38bdf8);
+  background: var(--accent);
   transition: width 0.2s ease;
 }
 
 .upload-progress-meta {
-  color: #a9c5dc;
+  color: var(--muted);
 }
 
 .file-transfer-error {
@@ -482,15 +491,15 @@ button {
   padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgb(65 65 65 / 0.85);
-  color: #e5e7eb;
+  background: var(--panel-bg-2);
+  color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
 .file-transfer-entry:hover {
   border-color: var(--border-strong);
-  background: rgb(74 74 74 / 0.96);
+  background: var(--hover-bg);
 }
 
 .file-transfer-entry-icon {
@@ -501,13 +510,13 @@ button {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  background: #555;
-  color: #cbd5e1;
+  background: var(--selection-bg);
+  color: var(--muted);
 }
 
 .file-transfer-entry-icon.directory {
-  background: #1d4ed8;
-  color: #dbeafe;
+  background: var(--accent);
+  color: var(--sidebar-bg);
 }
 
 .file-transfer-entry-name {
@@ -518,7 +527,7 @@ button {
 }
 
 .file-transfer-entry-meta {
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -563,20 +572,20 @@ button {
   max-width: 100%;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: linear-gradient(180deg, #444, #3b3b3b);
-  color: #e5e7eb;
+  background: var(--panel-bg-2);
+  color: var(--text);
   cursor: pointer;
 }
 
 .host-card:hover {
-  background: linear-gradient(180deg, #5a5a5a, #4a4a4a);
-  border-color: #8a8a8a;
+  background: var(--hover-bg);
+  border-color: var(--border-strong);
 }
 
 .host-card:focus-visible {
   outline: none;
-  border-color: #93c5fd;
-  box-shadow: 0 0 0 2px rgb(147 197 253 / 22%);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(122 162 214 / 22%);
 }
 
 .app-context-menu {
@@ -588,7 +597,7 @@ button {
   gap: 4px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(58, 58, 58, 0.98);
+  background: rgb(36 36 36 / 98%);
   box-shadow: 0 24px 80px rgb(0 0 0 / 40%);
   backdrop-filter: blur(10px);
 }
@@ -600,13 +609,13 @@ button {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #e5e7eb;
+  color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
 .app-context-menu button:hover {
-  background: #1f2937;
+  background: var(--hover-bg);
 }
 
 .app-context-menu button:disabled {
@@ -615,11 +624,11 @@ button {
 }
 
 .app-context-menu .menu-danger {
-  color: #fecaca;
+  color: var(--error);
 }
 
 .app-context-menu .menu-danger:hover {
-  background: #2b1114;
+  background: color-mix(in srgb, var(--error) 14%, var(--panel-bg-2));
 }
 
 .terminal-context-menu {
@@ -636,13 +645,13 @@ button {
 }
 
 .host-meta {
-  color: #9ca3af;
+  color: var(--muted);
   font-size: 11px;
 }
 
 .empty-state,
 .sidebar-note {
-  color: #cbd5e1;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -653,7 +662,7 @@ button {
   display: grid;
   place-items: center;
   padding: 12px;
-  background: rgb(2 6 23 / 72%);
+  background: rgb(24 24 24 / 72%);
   backdrop-filter: blur(8px);
   z-index: 1000;
 }
@@ -665,8 +674,8 @@ button {
   grid-template-rows: auto 1fr auto;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: linear-gradient(180deg, #3b3b3b, #303030);
-  color: #e5e7eb;
+  background: var(--panel-bg-2);
+  color: var(--text);
   box-shadow: 0 24px 80px rgb(0 0 0 / 45%);
   overflow: hidden;
 }
@@ -694,7 +703,7 @@ button {
 }
 
 .dialog-kicker {
-  color: #60a5fa;
+  color: var(--accent);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -718,7 +727,7 @@ button {
 
 .field span {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--muted);
 }
 
 .input-with-action {
@@ -743,8 +752,8 @@ button {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgb(66 66 66 / 0.72);
-  color: #cbd5e1;
+  background: var(--panel-bg-2);
+  color: var(--muted);
   font-size: 12px;
   cursor: pointer;
 }
@@ -755,9 +764,9 @@ button {
   margin: 0;
   appearance: none;
   -webkit-appearance: none;
-  border: 1px solid #7b8794;
+  border: 1px solid var(--weak);
   border-radius: 3px;
-  background: #2f2f2f;
+  background: var(--app-bg);
   display: inline-grid;
   place-items: center;
   cursor: pointer;
@@ -768,7 +777,7 @@ button {
   width: 7px;
   height: 7px;
   border-radius: 2px;
-  background: #60a5fa;
+  background: var(--accent);
   transform: scale(0);
   transition: transform 0.12s ease;
 }
@@ -785,9 +794,9 @@ button {
   margin-top: 10px;
   padding: 8px 10px;
   border-radius: 10px;
-  border: 1px solid #7f1d1d;
-  background: #2b1114;
-  color: #fecaca;
+  border: 1px solid var(--error);
+  background: color-mix(in srgb, var(--error) 14%, var(--panel-bg-2));
+  color: var(--error);
   font-size: 12px;
 }
 
@@ -801,19 +810,19 @@ button {
   gap: 12px;
   max-width: min(720px, calc(100% - 32px));
   padding: 8px 10px;
-  border: 1px solid #785c22;
+  border: 1px solid var(--warning);
   border-radius: 9px;
-  background: rgb(46 38 22 / 94%);
-  color: #fde68a;
+  background: color-mix(in srgb, var(--warning) 14%, var(--panel-bg-2));
+  color: var(--warning);
   box-shadow: 0 8px 28px rgb(0 0 0 / 35%);
   transform: translateX(-50%);
   font-size: 12px;
 }
 
 .terminal-status-banner.error {
-  border-color: #7f1d1d;
-  background: rgb(43 17 20 / 96%);
-  color: #fecaca;
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, var(--panel-bg-2));
+  color: var(--error);
 }
 
 .vault-overlay {
@@ -827,7 +836,7 @@ button {
 
 .vault-description {
   margin: 0 0 14px;
-  color: #cbd5e1;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -912,7 +921,10 @@ button {
   line-height: 40px;
 }
 
-.titlebar-button:hover,
+.titlebar-button:hover {
+  background: var(--hover-bg);
+}
+
 .titlebar-button.active {
   background: var(--selection-bg);
 }
@@ -978,7 +990,7 @@ button {
 }
 
 .titlebar-command.invalid {
-  border-color: #f38ba8;
+  border-color: var(--error);
 }
 
 .titlebar-command input {
@@ -994,8 +1006,7 @@ button {
 }
 
 .titlebar-command input::placeholder {
-  color: var(--muted);
-  opacity: 0.72;
+  color: var(--weak);
 }
 
 .titlebar-product {
@@ -1005,7 +1016,7 @@ button {
 
 .titlebar-separator {
   padding: 0 8px;
-  color: #f9e2af;
+  color: var(--accent);
 }
 
 .titlebar-current {
@@ -1060,8 +1071,8 @@ button {
 }
 
 .titlebar-close-button:hover {
-  background: #f38ba8;
-  color: #1e1e2e;
+  background: var(--error);
+  color: var(--sidebar-bg);
 }
 
 .sidebar-heading {
@@ -1106,7 +1117,7 @@ button {
 }
 
 .sidebar-host-controls .search-input::placeholder {
-  color: var(--muted);
+  color: var(--weak);
 }
 
 .sidebar-host-controls .search-input:focus {
@@ -1155,7 +1166,7 @@ button {
 
 .host-card:hover {
   border-color: var(--panel-bg-2);
-  background: var(--panel-bg-2);
+  background: var(--hover-bg);
 }
 
 .host-card:hover::before,
@@ -1225,7 +1236,7 @@ button {
 }
 
 .tab-item:hover {
-  background: var(--panel-bg-2);
+  background: var(--hover-bg);
   color: var(--text);
 }
 
@@ -1244,7 +1255,7 @@ button {
 .app-context-menu {
   border-color: var(--panel-bg-2);
   border-radius: 2px;
-  background: rgb(24 24 37 / 98%);
+  background: rgb(36 36 36 / 98%);
 }
 
 .app-context-menu button {

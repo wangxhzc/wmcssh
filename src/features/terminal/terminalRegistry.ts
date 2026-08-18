@@ -6,6 +6,31 @@ import type { SshDataEvent } from "../../types/ssh";
 import { defaultTerminalSettings } from "../../types/settings";
 import { sshResize } from "../../services/tauri/sshApi";
 
+const DEFAULT_TERMINAL_THEME = {
+  background: "#1C1C1C",
+  foreground: "#E4E4E4",
+  cursor: "#7AA2D6",
+  cursorAccent: "#1C1C1C",
+  selectionBackground: "#303030",
+  selectionForeground: "#E4E4E4",
+  black: "#181818",
+  red: "#C97B7B",
+  green: "#81B29A",
+  yellow: "#D0AD78",
+  blue: "#7AA2D6",
+  magenta: "#A0A0A0",
+  cyan: "#81B29A",
+  white: "#E4E4E4",
+  brightBlack: "#6F6F6F",
+  brightRed: "#C97B7B",
+  brightGreen: "#81B29A",
+  brightYellow: "#D0AD78",
+  brightBlue: "#7AA2D6",
+  brightMagenta: "#A0A0A0",
+  brightCyan: "#81B29A",
+  brightWhite: "#E4E4E4"
+} as const;
+
 export type TerminalRuntime = {
   tabId: string;
   sessionId?: string;
@@ -44,6 +69,7 @@ class TerminalRegistry {
       fontWeightBold: settings.fontWeightBold,
       lineHeight: settings.lineHeight,
       letterSpacing,
+      theme: DEFAULT_TERMINAL_THEME,
       allowProposedApi: false
     });
 
