@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useHostStore } from "../../../stores/hostStore";
 import { deleteHost, duplicateHost } from "../../../services/tauri/hostApi";
 import { connectHost } from "../../terminal/actions";
@@ -13,11 +13,9 @@ type HostMenuState = {
   y: number;
 } | null;
 
-type HostSidebarProps = {
-  onCollapse?: () => void;
-};
+const STATUS_MESSAGE_DURATION_MS = 3500;
 
-export function HostSidebar({ onCollapse }: HostSidebarProps) {
+export function HostSidebar() {
   const hosts = useHostStore((state) => state.hosts);
   const loading = useHostStore((state) => state.loading);
   const keyword = useHostStore((state) => state.keyword);
@@ -29,7 +27,35 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
   const [statusMessage, setStatusMessage] = useState<string>();
   const [hostMenu, setHostMenu] = useState<HostMenuState>(null);
   const hostMenuRef = useRef<HTMLDivElement | null>(null);
+  const statusTimerRef = useRef<number | undefined>(undefined);
   const hostMenuPosition = useAnchoredMenuPosition(hostMenu, hostMenuRef);
+
+  useEffect(() => {
+    return () => {
+      if (statusTimerRef.current !== undefined) {
+        window.clearTimeout(statusTimerRef.current);
+      }
+    };
+  }, []);
+
+  const clearStatusMessage = () => {
+    if (statusTimerRef.current !== undefined) {
+      window.clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = undefined;
+    }
+    setStatusMessage(undefined);
+  };
+
+  const showStatusMessage = (message: string) => {
+    if (statusTimerRef.current !== undefined) {
+      window.clearTimeout(statusTimerRef.current);
+    }
+    setStatusMessage(message);
+    statusTimerRef.current = window.setTimeout(() => {
+      setStatusMessage(undefined);
+      statusTimerRef.current = undefined;
+    }, STATUS_MESSAGE_DURATION_MS);
+  };
 
   const closeHostMenu = () => setHostMenu(null);
 
@@ -50,7 +76,7 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
 
   const copyText = async (text: string) => {
     await navigator.clipboard.writeText(text);
-    setStatusMessage("已复制到剪贴板");
+    showStatusMessage("已复制到剪贴板");
   };
 
   const createCopyHostName = (sourceName: string) => {
@@ -71,6 +97,10 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
 
   return (
     <aside className="sidebar" onClick={closeHostMenu} onContextMenu={closeHostMenu}>
+      <div className="sidebar-heading">
+        <span>主机</span>
+        <span className="sidebar-count">{hosts.length}</span>
+      </div>
       <div className="sidebar-actions">
         <div className="sidebar-host-controls">
           <input
@@ -82,13 +112,18 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
             }}
             placeholder="搜索主机"
           />
-          <button className="primary-button" onClick={openCreateDialog}>
-            新建主机
+          <button
+            className="sidebar-add-button"
+            onClick={openCreateDialog}
+            title="新建主机"
+            aria-label="新建主机"
+          >
+            +
           </button>
         </div>
       </div>
 
-      {statusMessage ? <div className="sidebar-note">{statusMessage}</div> : null}
+      {statusMessage ? <div className="sidebar-note" role="status">{statusMessage}</div> : null}
 
       {loading ? <p>加载中...</p> : null}
 
@@ -176,7 +211,7 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
             onClick={async () => {
               closeHostMenu();
               setBusyHostId(hostMenu.host.id);
-              setStatusMessage(undefined);
+              clearStatusMessage();
               try {
                 const copiedName = createCopyHostName(hostMenu.host.name);
                 await duplicateHost({
@@ -184,7 +219,7 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
                   name: copiedName
                 });
                 await loadHosts();
-                setStatusMessage(`已复制主机为「${copiedName}」`);
+                showStatusMessage(`已复制主机为「${copiedName}」`);
               } finally {
                 setBusyHostId(undefined);
               }
@@ -201,11 +236,11 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
               if (!window.confirm(`删除主机「${hostMenu.host.name}」？`)) return;
 
               setBusyHostId(hostMenu.host.id);
-              setStatusMessage(undefined);
+              clearStatusMessage();
               try {
                 await deleteHost(hostMenu.host.id);
                 await loadHosts();
-                setStatusMessage(`已删除主机「${hostMenu.host.name}」`);
+                showStatusMessage(`已删除主机「${hostMenu.host.name}」`);
               } finally {
                 setBusyHostId(undefined);
               }
@@ -215,16 +250,6 @@ export function HostSidebar({ onCollapse }: HostSidebarProps) {
           </button>
         </div>
       ) : null}
-      <button
-        type="button"
-        className="sidebar-toggle-button sidebar-toggle-boundary sidebar-toggle-collapse"
-        onClick={() => onCollapse?.()}
-        title="收起侧边栏"
-        aria-label="收起侧边栏"
-      >
-        <span className="sidebar-arrow-desktop">◀</span>
-        <span className="sidebar-arrow-mobile">▲</span>
-      </button>
     </aside>
   );
 }

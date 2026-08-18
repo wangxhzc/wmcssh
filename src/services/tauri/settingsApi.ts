@@ -3,6 +3,20 @@ import type { TerminalSettingsDto } from "../../types/settings";
 import { defaultTerminalSettings } from "../../types/settings";
 import { normalizeAppError } from "../../types/errors";
 
+export type AppInfoDto = {
+  contractVersion: number;
+  appVersion: string;
+  currentUsername: string;
+};
+
+export async function getAppInfo(): Promise<AppInfoDto> {
+  try {
+    return await invoke<AppInfoDto>("get_app_info");
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
 export async function getTerminalSettings(): Promise<TerminalSettingsDto> {
   try {
     return await invoke<TerminalSettingsDto>("get_terminal_settings");

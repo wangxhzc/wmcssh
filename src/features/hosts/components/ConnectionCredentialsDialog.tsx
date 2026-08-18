@@ -44,7 +44,7 @@ export function ConnectionCredentialsDialog() {
     request.resolve(result);
     setRequest(undefined);
   };
-  const finish = () => close({ username, rememberUsername, authType, password: authType === "password" ? password : undefined, privateKeyPath: authType === "private_key" ? privateKeyPath : undefined, privateKeyPassphrase: authType === "private_key" ? privateKeyPassphrase || undefined : undefined, rememberAuth });
+  const finish = () => close({ username, rememberUsername, authType, password: authType === "password" ? password || undefined : undefined, privateKeyPath: authType === "private_key" ? privateKeyPath : undefined, privateKeyPassphrase: authType === "private_key" ? privateKeyPassphrase || undefined : undefined, rememberAuth });
   const next = () => {
     if (!username.trim()) return setError("请输入用户名");
     setError(undefined);

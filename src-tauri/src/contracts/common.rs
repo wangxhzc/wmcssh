@@ -11,4 +11,5 @@ pub const CONTRACT_VERSION: u32 = 1;
 pub struct AppInfoDto {
     pub contract_version: u32,
     pub app_version: String,
+    pub current_username: String,
 }

@@ -221,10 +221,12 @@ function connectInput(hostId: string, credentials: ConnectionCredentials) {
   };
 }
 
-export async function connectHost(host: HostDto) {
-  const credentials = await requestConnectionCredentials(host);
+export async function connectHost(host: HostDto, suppliedCredentials?: ConnectionCredentials) {
+  const credentials = suppliedCredentials ?? await requestConnectionCredentials(host);
   if (!credentials) return;
-  host = await rememberConnectionCredentials(host, credentials);
+  if (!suppliedCredentials) {
+    host = await rememberConnectionCredentials(host, credentials);
+  }
 
   const store = useTerminalStore.getState();
   const tabId = store.createTerminalTab({ hostId: host.id, title: host.name });

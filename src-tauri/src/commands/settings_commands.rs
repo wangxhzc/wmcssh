@@ -29,5 +29,8 @@ pub async fn get_app_info() -> crate::contracts::AppInfoDto {
     crate::contracts::AppInfoDto {
         contract_version: crate::contracts::CONTRACT_VERSION,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
+        current_username: std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_default(),
     }
 }
