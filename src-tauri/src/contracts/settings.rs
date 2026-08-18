@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_TERMINAL_FONT_FAMILY: &str =
-    r#""AppTerminalMono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", Consolas, monospace"#;
+pub const DEFAULT_TERMINAL_FONT_FAMILY: &str = r#""AppTerminalMono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Source Han Mono SC", "WenQuanYi Micro Hei Mono", "WenQuanYi Zen Hei Mono", "Microsoft YaHei UI", "Microsoft YaHei", NSimSun, "PingFang SC", "Hiragino Sans GB", monospace"#;
 
 pub fn default_terminal_font_family() -> &'static str {
     DEFAULT_TERMINAL_FONT_FAMILY

@@ -10,7 +10,7 @@ export type TerminalSettingsDto = {
 };
 
 export const APP_TERMINAL_FONT_FAMILY =
-  '"AppTerminalMono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", Consolas, monospace';
+  '"AppTerminalMono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Source Han Mono SC", "WenQuanYi Micro Hei Mono", "WenQuanYi Zen Hei Mono", "Microsoft YaHei UI", "Microsoft YaHei", NSimSun, "PingFang SC", "Hiragino Sans GB", monospace';
 
 export const defaultTerminalSettings: TerminalSettingsDto = {
   fontFamily: APP_TERMINAL_FONT_FAMILY,

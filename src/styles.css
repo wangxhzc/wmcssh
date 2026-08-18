@@ -526,15 +526,16 @@ button {
   padding: 0 8px;
   font-family:
     "AppTerminalMono",
-    "Menlo",
-    "SF Mono",
-    "Cascadia Mono",
-    "DejaVu Sans Mono",
-    "Ubuntu Mono",
-    "Consolas",
     "Sarasa Mono SC",
     "Noto Sans Mono CJK SC",
-    "Symbols Nerd Font",
+    "Source Han Mono SC",
+    "WenQuanYi Micro Hei Mono",
+    "WenQuanYi Zen Hei Mono",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    NSimSun,
+    "PingFang SC",
+    "Hiragino Sans GB",
     monospace;
 }
 

@@ -11,6 +11,8 @@ const TERMINAL_LINE_HEIGHT_KEY: &str = "terminal.lineHeight";
 const TERMINAL_LETTER_SPACING_KEY: &str = "terminal.letterSpacing";
 const TERMINAL_CURSOR_BLINK_KEY: &str = "terminal.cursorBlink";
 const TERMINAL_SCROLLBACK_KEY: &str = "terminal.scrollback";
+const LEGACY_DEFAULT_TERMINAL_FONT_FAMILY: &str =
+    r#""AppTerminalMono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", Consolas, monospace"#;
 
 pub struct SettingsService {
     settings_repo: Arc<SettingsRepository>,
@@ -26,7 +28,7 @@ impl SettingsService {
         let values = self.settings_repo.list_values().await?;
 
         let stored_font_family = Self::read_string(&values, TERMINAL_FONT_FAMILY_KEY);
-        let font_family = default_terminal_font_family().to_string();
+        let font_family = Self::resolve_font_family(stored_font_family.as_deref());
         if stored_font_family.as_deref() != Some(font_family.as_str()) {
             self.settings_repo
                 .set_value(TERMINAL_FONT_FAMILY_KEY, &font_family)
@@ -70,7 +72,11 @@ impl SettingsService {
         &self,
         input: TerminalSettingsDto,
     ) -> Result<TerminalSettingsDto, AppErrorDto> {
-        let font_family = default_terminal_font_family();
+        let font_family = if input.font_family.trim().is_empty() {
+            default_terminal_font_family()
+        } else {
+            input.font_family.trim()
+        };
         let letter_spacing = Self::clamp_letter_spacing(input.letter_spacing);
 
         self.settings_repo
@@ -154,5 +160,38 @@ impl SettingsService {
 
     fn clamp_letter_spacing(value: f32) -> f32 {
         value.clamp(-1.0, 1.0)
+    }
+
+    fn resolve_font_family(stored: Option<&str>) -> String {
+        match stored {
+            None | Some(LEGACY_DEFAULT_TERMINAL_FONT_FAMILY) => {
+                default_terminal_font_family().to_string()
+            }
+            Some(value) => value.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SettingsService, LEGACY_DEFAULT_TERMINAL_FONT_FAMILY};
+    use crate::contracts::default_terminal_font_family;
+
+    #[test]
+    fn migrates_missing_and_legacy_default_font_families() {
+        assert_eq!(
+            SettingsService::resolve_font_family(None),
+            default_terminal_font_family()
+        );
+        assert_eq!(
+            SettingsService::resolve_font_family(Some(LEGACY_DEFAULT_TERMINAL_FONT_FAMILY)),
+            default_terminal_font_family()
+        );
+    }
+
+    #[test]
+    fn preserves_custom_font_family() {
+        let custom = r#""Custom Mono", monospace"#;
+        assert_eq!(SettingsService::resolve_font_family(Some(custom)), custom);
     }
 }
