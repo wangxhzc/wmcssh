@@ -147,3 +147,4 @@ src-tauri/target/<target>/release/bundle/
 - [API 契约](docs/04-API契约.md)
 - [数据库设计](docs/05-数据库设计.md)
 - [开发说明](docs/06-开发路线图.md)
+- [项目现状](docs/07-项目现状.md)
