@@ -4,6 +4,7 @@ use crate::contracts::{
 };
 use crate::repositories::recent_session_repository::RecentSessionRepository;
 use crate::services::host_service::HostService;
+use crate::ssh::host_key::HostKeyStore;
 use crate::ssh::session_worker::run_session_worker;
 use crate::ssh::types::{SessionCommand, SessionHandle, SessionWorkerInput};
 use crate::utils::base64::decode_base64;
@@ -18,14 +19,20 @@ pub struct SessionManager {
     host_service: Arc<HostService>,
     #[allow(dead_code)]
     recent_repo: Arc<RecentSessionRepository>,
+    host_key_store: Arc<HostKeyStore>,
 }
 
 impl SessionManager {
-    pub fn new(host_service: Arc<HostService>, recent_repo: Arc<RecentSessionRepository>) -> Self {
+    pub fn new(
+        host_service: Arc<HostService>,
+        recent_repo: Arc<RecentSessionRepository>,
+        host_key_store: Arc<HostKeyStore>,
+    ) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
             host_service,
             recent_repo,
+            host_key_store,
         }
     }
 
@@ -38,16 +45,7 @@ impl SessionManager {
         let session_id = new_id();
         let config = self
             .host_service
-            .build_connect_config_with_credentials(
-                &input.host_id,
-                input.initial_cols,
-                input.initial_rows,
-                input.username,
-                input.auth_type,
-                input.password,
-                input.private_key_path,
-                input.private_key_passphrase,
-            )
+            .build_connect_config_with_credentials(input)
             .await?;
 
         let (command_tx, command_rx) = std::sync::mpsc::channel::<SessionCommand>();
@@ -68,6 +66,7 @@ impl SessionManager {
             command_rx,
             on_data,
             recent_repo: self.recent_repo.clone(),
+            host_key_store: self.host_key_store.clone(),
         };
         tauri::async_runtime::spawn_blocking(move || run_session_worker(app, worker_input));
 

@@ -40,6 +40,38 @@ export type SshDisconnectInput = {
   sessionId: SessionId;
 };
 
+export type TrustHostKeyInput = {
+  hostId: HostId;
+  expectedFingerprint: string;
+};
+
+export type HostKeyChallenge = {
+  hostname: string;
+  port: number;
+  keyType: string;
+  fingerprint: string;
+  changed: boolean;
+};
+
+export type TrustedHostKey = {
+  id: string;
+  hostPatterns: string;
+  hostname?: string;
+  port?: number;
+  keyType: string;
+  fingerprint: string;
+  hashed: boolean;
+  marker?: string;
+};
+
+export type DeleteTrustedHostKeyInput = {
+  id: string;
+};
+
+export type DeleteTrustedHostKeyResult = {
+  deleted: boolean;
+};
+
 export type SshDataEvent = {
   event: "data";
   data: {

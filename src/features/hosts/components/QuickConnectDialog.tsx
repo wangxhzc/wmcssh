@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { useHostStore } from "../../../stores/hostStore";
+import { listHosts, updateHost } from "../../../services/tauri/hostApi";
 import { connectHost } from "../../terminal/actions";
 import type { ConnectionCredentials } from "../connectionCredentials";
+import type { HostDto } from "../../../types/host";
 import type { QuickConnectTarget } from "../quickConnect";
+import { findMatchingQuickConnectHost } from "../quickConnect";
 
 type QuickConnectDialogProps = {
   target: QuickConnectTarget | null;
@@ -12,6 +15,7 @@ type QuickConnectDialogProps = {
 
 export function QuickConnectDialog({ target, currentUsername, onClose }: QuickConnectDialogProps) {
   const createHost = useHostStore((state) => state.createHost);
+  const loadHosts = useHostStore((state) => state.loadHosts);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [rememberUsername, setRememberUsername] = useState(true);
@@ -28,6 +32,15 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
     setSubmitting(false);
     setError(undefined);
   }, [currentUsername, target]);
+
+  useEffect(() => {
+    if (!target || submitting) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, submitting, target]);
 
   if (!target) return null;
 
@@ -46,14 +59,27 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
     setError(undefined);
 
     try {
-      const host = await createHost({
-        name: target.hostname,
-        hostname: target.hostname,
-        port: target.port,
-        username: rememberUsername ? normalizedUsername : "",
-        authType: "password",
-        password: rememberPassword ? password : undefined
-      });
+      const existingHost = findMatchingQuickConnectHost((await listHosts()).hosts, target);
+      let host: HostDto;
+      if (existingHost) {
+        host = rememberUsername || rememberPassword
+          ? await updateHost(existingHost.id, {
+              username: rememberUsername ? normalizedUsername : undefined,
+              authType: rememberPassword ? "password" : undefined,
+              password: rememberPassword ? { action: "replace", value: password } : undefined
+            })
+          : existingHost;
+        if (rememberUsername || rememberPassword) await loadHosts();
+      } else {
+        host = await createHost({
+          name: target.hostname,
+          hostname: target.hostname,
+          port: target.port,
+          username: rememberUsername ? normalizedUsername : "",
+          authType: "password",
+          password: rememberPassword ? password : undefined
+        });
+      }
       const credentials: ConnectionCredentials = {
         username: normalizedUsername,
         rememberUsername: false,
@@ -71,7 +97,7 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
   };
 
   return (
-    <div className="dialog-overlay" role="presentation" onClick={onClose}>
+    <div className="dialog-overlay" role="presentation" onClick={() => { if (!submitting) onClose(); }}>
       <div
         className="dialog quick-connect-dialog"
         role="dialog"
@@ -84,7 +110,7 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
             <div className="dialog-kicker">Quick connect</div>
             <h3 id="quick-connect-title">连接到 {target.hostname}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭" disabled={submitting}>
             ×
           </button>
         </div>

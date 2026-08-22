@@ -1,3 +1,5 @@
+import type { HostDto } from "../../types/host";
+
 export type QuickConnectTarget = {
   hostname: string;
   username?: string;
@@ -22,4 +24,11 @@ export function parseQuickConnectCommand(value: string): QuickConnectTarget {
     username: match.groups.username,
     port
   };
+}
+
+export function findMatchingQuickConnectHost(hosts: HostDto[], target: QuickConnectTarget) {
+  const normalizedHostname = target.hostname.toLocaleLowerCase();
+  return hosts.find((host) =>
+    host.hostname.toLocaleLowerCase() === normalizedHostname && host.port === target.port
+  );
 }

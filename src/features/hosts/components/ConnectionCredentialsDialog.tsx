@@ -38,6 +38,18 @@ export function ConnectionCredentialsDialog() {
     return () => window.removeEventListener(CONNECTION_CREDENTIALS_EVENT, listener);
   }, []);
 
+  useEffect(() => {
+    if (!request) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        request.resolve(null);
+        setRequest(undefined);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [request]);
+
   if (!request) return null;
   const needsAuth = request.force || (request.host.authType === "password" ? !request.host.hasPassword : !request.host.privateKeyPath);
   const close = (result: ConnectionCredentials | null) => {

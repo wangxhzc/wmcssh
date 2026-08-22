@@ -1,13 +1,17 @@
 use crate::contracts::{AppErrorCode, AppErrorDto};
+use crate::ssh::host_key::HostKeyStore;
 use crate::ssh::types::{AuthConfig, ConnectConfig};
 use ssh2::Session;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
-pub fn connect_ssh_session(config: &ConnectConfig) -> Result<Session, AppErrorDto> {
-    let tcp = connect_tcp_stream(&config.hostname, config.port, config.connect_timeout_ms)?;
-
+pub fn connect_ssh_transport(
+    hostname: &str,
+    port: u16,
+    timeout_ms: u64,
+) -> Result<Session, AppErrorDto> {
+    let tcp = connect_tcp_stream(hostname, port, timeout_ms)?;
     let mut session = Session::new().map_err(|err| {
         AppErrorDto::with_details(
             AppErrorCode::IoError,
@@ -17,6 +21,7 @@ pub fn connect_ssh_session(config: &ConnectConfig) -> Result<Session, AppErrorDt
         )
     })?;
 
+    session.set_timeout(u32::try_from(timeout_ms).unwrap_or(u32::MAX).max(1));
     session.set_tcp_stream(tcp);
     session.handshake().map_err(|err| {
         AppErrorDto::with_details(
@@ -26,6 +31,15 @@ pub fn connect_ssh_session(config: &ConnectConfig) -> Result<Session, AppErrorDt
             true,
         )
     })?;
+    Ok(session)
+}
+
+pub fn connect_ssh_session(
+    config: &ConnectConfig,
+    host_key_store: &HostKeyStore,
+) -> Result<Session, AppErrorDto> {
+    let session = connect_ssh_transport(&config.hostname, config.port, config.connect_timeout_ms)?;
+    host_key_store.verify(&session, &config.hostname, config.port)?;
 
     authenticate(&session, config)?;
 
@@ -86,7 +100,7 @@ fn connect_tcp_stream(
     timeout_ms: u64,
 ) -> Result<TcpStream, AppErrorDto> {
     let timeout = Duration::from_millis(timeout_ms.max(1));
-    let addr = (hostname, port)
+    let addresses = (hostname, port)
         .to_socket_addrs()
         .map_err(|err| {
             AppErrorDto::with_details(
@@ -96,21 +110,34 @@ fn connect_tcp_stream(
                 true,
             )
         })?
-        .next()
-        .ok_or_else(|| {
-            AppErrorDto::new(
-                AppErrorCode::NetworkUnreachable,
-                "No socket address resolved for host",
-                true,
-            )
-        })?;
-
-    TcpStream::connect_timeout(&addr, timeout).map_err(|err| {
-        AppErrorDto::with_details(
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(AppErrorDto::new(
             AppErrorCode::NetworkUnreachable,
-            format!("Failed to connect to {addr}"),
-            err.to_string(),
+            "No socket address resolved for host",
             true,
-        )
-    })
+        ));
+    }
+
+    let mut last_error = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some((address, error)),
+        }
+    }
+
+    let Some((address, error)) = last_error else {
+        return Err(AppErrorDto::new(
+            AppErrorCode::NetworkUnreachable,
+            "No socket address could be attempted",
+            true,
+        ));
+    };
+    Err(AppErrorDto::with_details(
+        AppErrorCode::NetworkUnreachable,
+        format!("Failed to connect to {address}"),
+        error.to_string(),
+        true,
+    ))
 }

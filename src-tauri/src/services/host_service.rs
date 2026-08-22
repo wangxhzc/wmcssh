@@ -1,6 +1,6 @@
 use crate::contracts::{
     AppErrorCode, AppErrorDto, AuthType, CreateHostInput, DuplicateHostInput, HostDto, HostFilter,
-    SecretUpdate, UpdateHostInput,
+    SecretUpdate, SshConnectInput, UpdateHostInput,
 };
 use crate::repositories::host_repository::{CreateHostRecord, HostRepository, UpdateHostRecord};
 use crate::secrets::secret_store::{host_passphrase_ref, host_password_ref, DynSecretStore};
@@ -318,23 +318,16 @@ impl HostService {
 
     pub async fn build_connect_config_with_credentials(
         &self,
-        host_id: &str,
-        initial_cols: u16,
-        initial_rows: u16,
-        username: Option<String>,
-        auth_type: Option<AuthType>,
-        password: Option<String>,
-        private_key_path: Option<String>,
-        private_key_passphrase: Option<String>,
+        input: SshConnectInput,
     ) -> Result<ConnectConfig, AppErrorDto> {
-        if username.is_none() && auth_type.is_none() {
+        if input.username.is_none() && input.auth_type.is_none() {
             return self
-                .build_connect_config(host_id, initial_cols, initial_rows)
+                .build_connect_config(&input.host_id, input.initial_cols, input.initial_rows)
                 .await;
         }
 
-        let host = self.host_repo.get_host(host_id).await?;
-        let username = username.unwrap_or(host.username);
+        let host = self.host_repo.get_host(&input.host_id).await?;
+        let username = input.username.unwrap_or(host.username);
         if username.trim().is_empty() {
             return Err(AppErrorDto::new(
                 AppErrorCode::HostInvalid,
@@ -342,10 +335,10 @@ impl HostService {
                 false,
             ));
         }
-        let auth_type = auth_type.unwrap_or(parse_auth_type(&host.auth_type)?);
+        let auth_type = input.auth_type.unwrap_or(parse_auth_type(&host.auth_type)?);
         let auth = match auth_type {
             AuthType::Password => AuthConfig::Password {
-                password: match password {
+                password: match input.password {
                     Some(value) => value,
                     None => {
                         let key = host.password_ref.ok_or_else(|| {
@@ -360,14 +353,17 @@ impl HostService {
                 },
             },
             AuthType::PrivateKey => AuthConfig::PrivateKey {
-                private_key_path: private_key_path.or(host.private_key_path).ok_or_else(|| {
-                    AppErrorDto::new(
-                        AppErrorCode::HostInvalid,
-                        "Private key path is required",
-                        false,
-                    )
-                })?,
-                passphrase: match private_key_passphrase {
+                private_key_path: input
+                    .private_key_path
+                    .or(host.private_key_path)
+                    .ok_or_else(|| {
+                        AppErrorDto::new(
+                            AppErrorCode::HostInvalid,
+                            "Private key path is required",
+                            false,
+                        )
+                    })?,
+                passphrase: match input.private_key_passphrase {
                     Some(value) => Some(value),
                     None => match host.passphrase_ref {
                         Some(key) => Some(self.secret_store.get_secret(&key).await?),
@@ -384,8 +380,8 @@ impl HostService {
             auth,
             connect_timeout_ms: host.connect_timeout_ms as u64,
             keepalive_interval_secs: host.keepalive_interval_secs as u64,
-            initial_cols,
-            initial_rows,
+            initial_cols: input.initial_cols,
+            initial_rows: input.initial_rows,
             startup_command: host.startup_command,
         })
     }

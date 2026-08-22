@@ -1,4 +1,4 @@
-use crate::contracts::{EpochMillis, HostId, SessionId};
+use crate::contracts::{AuthType, EpochMillis, HostId, SessionId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -12,6 +12,11 @@ pub struct ListRemoteDirectoryInput {
 #[serde(rename_all = "camelCase")]
 pub struct OpenFileTransferSessionInput {
     pub host_id: HostId,
+    pub username: Option<String>,
+    pub auth_type: Option<AuthType>,
+    pub password: Option<String>,
+    pub private_key_path: Option<String>,
+    pub private_key_passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,13 +69,6 @@ pub struct UploadRemoteFileInput {
     pub local_file_path: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteDirectoryFilePayload {
-    pub relative_path: String,
-    pub content_base64: String,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadRemoteDirectoryFilePayload {
@@ -91,48 +89,70 @@ pub struct UploadRemoteDirectoryInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CancelUploadInput {
+pub struct CancelTransferInput {
     pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UploadProgress {
+pub struct TransferProgress {
     pub transfer_id: String,
-    pub uploaded_bytes: u64,
+    pub status: TransferStatus,
+    pub transferred_bytes: u64,
     pub total_bytes: u64,
-    pub current_file: String,
+    pub current_file: Option<String>,
     pub completed_files: usize,
     pub total_files: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DownloadRemoteFileInput {
+pub struct DownloadRemotePathInput {
+    pub transfer_id: String,
     pub transfer_session_id: SessionId,
-    pub remote_file_path: String,
+    pub remote_path: String,
+    pub local_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DownloadRemoteFileResult {
-    pub file_name: String,
-    pub content_base64: String,
+pub struct TransferTask {
+    pub transfer_id: String,
+    pub transfer_session_id: SessionId,
+    pub direction: TransferDirection,
+    pub status: TransferStatus,
+    pub source_path: String,
+    pub destination_path: String,
+    pub transferred_bytes: u64,
+    pub total_bytes: u64,
+    pub current_file: Option<String>,
+    pub completed_files: usize,
+    pub total_files: usize,
+    pub error: Option<crate::contracts::AppErrorDto>,
+    pub created_at: EpochMillis,
+    pub started_at: Option<EpochMillis>,
+    pub finished_at: Option<EpochMillis>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DownloadRemotePathInput {
-    pub transfer_session_id: SessionId,
-    pub remote_path: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadRemotePathResult {
-    pub name: String,
-    pub entry_type: RemoteFileEntryType,
-    pub content_base64: Option<String>,
-    pub directories: Vec<String>,
-    pub files: Vec<RemoteDirectoryFilePayload>,
+pub struct GetTransferTaskInput {
+    pub transfer_id: String,
 }

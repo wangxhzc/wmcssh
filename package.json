@@ -1,32 +1,31 @@
 {
   "name": "wmcssh",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "tauri": "tauri",
     "dev:windows:amd64": "set RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu&& tauri dev --target x86_64-pc-windows-gnu",
     "build:linux:amd64": "npm run tauri build -- --target x86_64-unknown-linux-gnu --bundles deb",
-    "build:windows:amd64": "set RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu&& npm run tauri build -- --target x86_64-pc-windows-gnu"
+    "build:windows:amd64": "set RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu&& npm run tauri build -- --target x86_64-pc-windows-gnu --bundles nsis"
   },
   "dependencies": {
-    "@fontsource/jetbrains-mono": "^5.2.8",
-    "@fontsource/noto-sans-sc": "^5.2.9",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
-    "@vitejs/plugin-react": "latest",
+    "@vitejs/plugin-react": "^6.0.1",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
-    "react": "latest",
-    "react-dom": "latest",
-    "typescript": "latest",
-    "vite": "latest",
-    "zustand": "latest"
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.12",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.1",

@@ -64,16 +64,16 @@ fn run_session_worker_inner(
     app: &AppHandle,
     input: &mut SessionWorkerInput,
 ) -> Result<(), AppErrorDto> {
-    let session = connect_ssh_session(&input.config).map_err(|error| {
-        crate::app_log!(
-            "[ssh-worker][{}] {} code={:?} details={:?}",
-            input.session_id,
-            error.message,
-            error.code,
-            error.details
-        );
-        error
-    })?;
+    let session =
+        connect_ssh_session(&input.config, &input.host_key_store).inspect_err(|error| {
+            crate::app_log!(
+                "[ssh-worker][{}] {} code={:?} details={:?}",
+                input.session_id,
+                error.message,
+                error.code,
+                error.details
+            );
+        })?;
 
     let mut channel = session.channel_session().map_err(|err| {
         let error = AppErrorDto::with_details(
@@ -243,7 +243,7 @@ fn run_session_worker_inner(
             Err(err) if is_transport_read_error(&err) => {
                 transient_read_errors += 1;
                 if transient_read_errors == 1
-                    || transient_read_errors % READ_ERROR_KEEPALIVE_INTERVAL == 0
+                    || transient_read_errors.is_multiple_of(READ_ERROR_KEEPALIVE_INTERVAL)
                 {
                     crate::app_log!(
                         "[ssh-worker][{}] transient transport read error {}/{}: {}",
@@ -280,12 +280,12 @@ fn run_session_worker_inner(
                     return Err(fatal);
                 }
 
-                if transient_read_errors % READ_ERROR_KEEPALIVE_INTERVAL == 0 {
+                if transient_read_errors.is_multiple_of(READ_ERROR_KEEPALIVE_INTERVAL) {
                     let _ = session.keepalive_send();
                 }
 
-                if !handled_command {
-                    if wait_for_command(
+                if !handled_command
+                    && wait_for_command(
                         app,
                         input,
                         &mut channel,
@@ -293,17 +293,17 @@ fn run_session_worker_inner(
                         &mut command_rx_closed,
                         &mut pending_input,
                         &mut pending_input_bytes,
-                    )? {
-                        return Ok(());
-                    }
+                    )?
+                {
+                    return Ok(());
                 } else {
                     std::thread::sleep(idle_wait);
                 }
             }
             Err(err) if is_retryable_io_error(&err) => {
                 transient_read_errors = 0;
-                if !handled_command {
-                    if wait_for_command(
+                if !handled_command
+                    && wait_for_command(
                         app,
                         input,
                         &mut channel,
@@ -311,13 +311,13 @@ fn run_session_worker_inner(
                         &mut command_rx_closed,
                         &mut pending_input,
                         &mut pending_input_bytes,
-                    )? {
-                        crate::app_log!(
-                            "[ssh-worker][{}] exiting: reason=user_disconnect",
-                            input.session_id
-                        );
-                        return Ok(());
-                    }
+                    )?
+                {
+                    crate::app_log!(
+                        "[ssh-worker][{}] exiting: reason=user_disconnect",
+                        input.session_id
+                    );
+                    return Ok(());
                 }
             }
             Err(err) => {
@@ -458,29 +458,23 @@ fn drain_channel_output(
 ) -> Result<bool, AppErrorDto> {
     let mut buf = [0u8; 32768];
 
-    loop {
-        match channel.read(&mut buf) {
-            Ok(0) => return Ok(false),
-            Ok(n) => {
-                let data_base64 = encode_base64(&buf[..n]);
-                let _ = input.on_data.send(SshDataEvent::Data {
-                    session_id: input.session_id.clone(),
-                    data_base64,
-                });
-                return Ok(true);
-            }
-            Err(err) if is_retryable_io_error(&err) || is_transport_read_error(&err) => {
-                return Ok(false)
-            }
-            Err(err) => {
-                return Err(AppErrorDto::with_details(
-                    AppErrorCode::IoError,
-                    "Failed while draining SSH output",
-                    err.to_string(),
-                    true,
-                ))
-            }
+    match channel.read(&mut buf) {
+        Ok(0) => Ok(false),
+        Ok(n) => {
+            let data_base64 = encode_base64(&buf[..n]);
+            let _ = input.on_data.send(SshDataEvent::Data {
+                session_id: input.session_id.clone(),
+                data_base64,
+            });
+            Ok(true)
         }
+        Err(err) if is_retryable_io_error(&err) || is_transport_read_error(&err) => Ok(false),
+        Err(err) => Err(AppErrorDto::with_details(
+            AppErrorCode::IoError,
+            "Failed while draining SSH output",
+            err.to_string(),
+            true,
+        )),
     }
 }
 

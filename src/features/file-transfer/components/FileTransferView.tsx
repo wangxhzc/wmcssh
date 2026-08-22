@@ -1,25 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { mkdir, readDir, writeFile } from "@tauri-apps/plugin-fs";
-import { base64ToUint8Array } from "../../../services/terminal/terminalCodec";
+import { readDir } from "@tauri-apps/plugin-fs";
 import {
-  downloadRemotePath,
-  cancelUpload,
+  enqueueDownloadRemotePath,
+  enqueueUploadRemoteDirectory,
+  enqueueUploadRemoteFile,
   listRemoteDirectory,
-  openFileTransferSession,
-  uploadRemoteDirectory,
-  uploadRemoteFile
+  openFileTransferSession
 } from "../../../services/tauri/fileTransferApi";
 import { useTerminalStore } from "../../../stores/terminalStore";
-import type { AppErrorDto } from "../../../types/errors";
+import { useTransferQueueStore } from "../../../stores/transferQueueStore";
+import { normalizeAppError, type AppErrorDto } from "../../../types/errors";
 import type {
   FileTransferLoadState,
   RemoteFileEntry,
-  UploadProgress,
+  TransferProgress,
   UploadRemoteDirectoryFilePayload
 } from "../../../types/fileTransfer";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
+import { confirmAndTrustHostKey } from "../../hosts/hostKeyTrust";
+import { getHost } from "../../../services/tauri/hostApi";
+import { requestConnectionCredentials } from "../../hosts/connectionCredentials";
+import { rememberConnectionCredentials } from "../../terminal/actions";
+import { TransferQueue } from "./TransferQueue";
 
 type FileTransferViewProps = {
   tabId: string;
@@ -31,17 +35,6 @@ type FileTransferViewProps = {
 const MAX_DIRECTORY_FILE_COUNT = 1000;
 const MAX_DIRECTORY_DEPTH = 10;
 const DIRECTORY_LIMIT_MESSAGE = "文件数量过多请打包后上传或下载";
-
-type UploadViewState = UploadProgress & { startedAt: number; cancelling: boolean };
-
-function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let size = value / 1024;
-  let index = 0;
-  while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
-  return `${size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)} ${units[index]}`;
-}
 
 function parentPath(path: string) {
   if (path === "/") return "/";
@@ -109,7 +102,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const [state, setState] = useState<FileTransferLoadState>({ status: "idle" });
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<UploadViewState>();
+  const [queueVisible, setQueueVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ entry: RemoteFileEntry; x: number; y: number } | null>(null);
   const [uploadMenu, setUploadMenu] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -117,13 +110,14 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const contextMenuPosition = useAnchoredMenuPosition(contextMenu, menuRef);
   const uploadMenuPosition = useAnchoredMenuPosition(uploadMenu, uploadMenuRef);
   const bindFileTransferSession = useTerminalStore((store) => store.bindFileTransferSession);
+  const applyTransferProgress = useTransferQueueStore((store) => store.applyProgress);
+  const upsertTransferTask = useTransferQueueStore((store) => store.upsertTask);
 
   const createProgressChannel = (transferId: string) => {
-    const startedAt = Date.now();
-    const channel = new Channel<UploadProgress>();
+    const channel = new Channel<TransferProgress>();
     channel.onmessage = (progress) => {
       if (progress.transferId !== transferId) return;
-      setUploadProgress((current) => ({ ...progress, startedAt: current?.startedAt ?? startedAt, cancelling: current?.cancelling ?? false }));
+      applyTransferProgress(progress);
     };
     return channel;
   };
@@ -134,7 +128,32 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
       try {
         let activeTransferSessionId = transferSessionId;
         if (!activeTransferSessionId) {
-          const result = await openFileTransferSession({ hostId });
+          let result;
+          try {
+            result = await openFileTransferSession({ hostId });
+          } catch (cause) {
+            const appError = normalizeAppError(cause);
+            const needsCredentials = appError.code === "auth_failed"
+              || appError.code === "secret_not_found"
+              || appError.code === "host_invalid";
+            if (!needsCredentials) throw appError;
+
+            let host = await getHost(hostId);
+            const credentials = await requestConnectionCredentials(host, {
+              force: true,
+              message: `文件传输认证失败：${appError.message}`
+            });
+            if (!credentials) throw appError;
+            host = await rememberConnectionCredentials(host, credentials);
+            result = await openFileTransferSession({
+              hostId: host.id,
+              username: credentials.username?.trim() || undefined,
+              authType: credentials.authType,
+              password: credentials.password,
+              privateKeyPath: credentials.privateKeyPath,
+              privateKeyPassphrase: credentials.privateKeyPassphrase
+            });
+          }
           activeTransferSessionId = result.transferSessionId;
           bindFileTransferSession(tabId, activeTransferSessionId);
         }
@@ -229,22 +248,22 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
       const progressChannel = createProgressChannel(transferId);
 
       try {
-        await uploadRemoteFile({
+        const task = await enqueueUploadRemoteFile({
           transferId,
           transferSessionId,
           remoteDirPath: state.path,
           fileName,
           localFilePath: filePath
         }, progressChannel);
-        setNotice(`已上传 ${fileName}`);
-        await loadDirectory(state.path);
+        upsertTransferTask(task);
+        setQueueVisible(true);
+        setNotice(`已将 ${fileName} 加入后台上传队列`);
       } catch (error) {
-        console.error("[wmcssh][file-transfer] upload failed", error);
+        console.error("[wmcssh][file-transfer] enqueue upload failed", error);
         const appError = error as AppErrorDto;
         const message = appError.message ?? String(error);
-        setNotice(message === "上传已取消" ? message : `上传失败：${message}`);
+        setNotice(`加入上传队列失败：${message}`);
       } finally {
-        setUploadProgress(undefined);
         setBusy(false);
       }
     })();
@@ -281,7 +300,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
 
       try {
         const payload = await collectLocalDirectoryPayload(directoryPath);
-        await uploadRemoteDirectory({
+        const task = await enqueueUploadRemoteDirectory({
           transferId,
           transferSessionId,
           remoteDirPath: state.path,
@@ -289,14 +308,14 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           directories: payload.directories,
           files: payload.files
         }, progressChannel);
-        setNotice(`已上传目录 ${directoryName}`);
-        await loadDirectory(state.path);
+        upsertTransferTask(task);
+        setQueueVisible(true);
+        setNotice(`已将目录 ${directoryName} 加入后台上传队列`);
       } catch (error) {
-        console.error("[wmcssh][file-transfer] directory upload failed", error);
+        console.error("[wmcssh][file-transfer] enqueue directory upload failed", error);
         const message = error instanceof Error ? error.message : (error as AppErrorDto).message ?? String(error);
-        setNotice(message === "上传已取消" ? message : `上传失败：${message}`);
+        setNotice(`加入上传队列失败：${message}`);
       } finally {
-        setUploadProgress(undefined);
         setBusy(false);
       }
     })();
@@ -313,12 +332,8 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     setContextMenu(null);
 
     try {
-      const result = await downloadRemotePath({
-        transferSessionId,
-        remotePath: entry.path
-      });
-
-      if (result.entryType === "directory") {
+      let localPath: string;
+      if (entry.entryType === "directory") {
         const targetRoot = await open({
           multiple: false,
           directory: true
@@ -328,56 +343,46 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           setNotice("下载已取消");
           return;
         }
-
-        const directoryPath = joinLocalPath(targetRoot, result.name);
-        await mkdir(directoryPath, { recursive: true });
-        for (const directory of result.directories) {
-          await mkdir(joinLocalPath(directoryPath, directory), { recursive: true });
+        localPath = joinLocalPath(targetRoot, entry.name);
+      } else {
+        const targetPath = await save({ defaultPath: entry.name });
+        if (!targetPath) {
+          setNotice("下载已取消");
+          return;
         }
-        for (const file of result.files) {
-          const targetPath = joinLocalPath(directoryPath, file.relativePath);
-          const parent = file.relativePath.split("/").slice(0, -1).join("/");
-          if (parent) {
-            await mkdir(joinLocalPath(directoryPath, parent), { recursive: true });
-          }
-          await writeFile(targetPath, base64ToUint8Array(file.contentBase64));
-        }
-        setNotice(`已下载目录 ${result.name}`);
-        return;
+        localPath = targetPath;
       }
 
-      if (!result.contentBase64) {
-        setNotice("下载失败：远程文件内容为空");
-        return;
-      }
-
-      const targetPath = await save({ defaultPath: result.name });
-      if (!targetPath) {
-        setNotice("下载已取消");
-        return;
-      }
-
-      await writeFile(targetPath, base64ToUint8Array(result.contentBase64));
-      setNotice(`已下载 ${result.name}`);
+      const transferId = crypto.randomUUID();
+      const progressChannel = createProgressChannel(transferId);
+      const task = await enqueueDownloadRemotePath({
+        transferId,
+        transferSessionId,
+        remotePath: entry.path,
+        localPath
+      }, progressChannel);
+      upsertTransferTask(task);
+      setQueueVisible(true);
+      setNotice(`已将 ${entry.name} 加入后台下载队列`);
     } catch (error) {
-      console.error("[wmcssh][file-transfer] download failed", error);
+      console.error("[wmcssh][file-transfer] enqueue download failed", error);
       if (error === null || error === undefined) {
         setNotice("下载已取消");
         return;
       }
 
       if (typeof error === "string") {
-        setNotice(`下载失败：${error}`);
+        setNotice(`加入下载队列失败：${error}`);
         return;
       }
 
       const appError = error as AppErrorDto;
       if (typeof appError === "object" && appError !== null && "message" in appError) {
-        setNotice(`下载失败：${String(appError.message)}`);
+        setNotice(`加入下载队列失败：${String(appError.message)}`);
         return;
       }
 
-      setNotice(`下载失败：${String(error)}`);
+      setNotice(`加入下载队列失败：${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -392,6 +397,15 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     } catch (error) {
       console.error("[wmcssh][file-transfer] copy path failed", error);
       setNotice("复制路径失败");
+    }
+  };
+
+  const handleTrustHostKey = async (error: AppErrorDto) => {
+    try {
+      const trusted = await confirmAndTrustHostKey(hostId, error);
+      if (trusted) await loadDirectory();
+    } catch (cause) {
+      setState({ status: "error", error: normalizeAppError(cause) });
     }
   };
 
@@ -461,27 +475,25 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         >
           上传
         </button>
+        <button
+          type="button"
+          className={`ghost-button${queueVisible ? " active" : ""}`}
+          onClick={() => setQueueVisible((visible) => !visible)}
+          aria-expanded={queueVisible}
+          aria-controls={`transfer-queue-${tabId}`}
+        >
+          传输队列
+        </button>
         <div className="file-transfer-path">
           {state.status === "ready" ? state.path : "正在连接远程目录..."}
         </div>
       </div>
 
-      {uploadProgress ? (() => {
-        const percent = uploadProgress.totalBytes > 0 ? Math.min(100, uploadProgress.uploadedBytes / uploadProgress.totalBytes * 100) : uploadProgress.completedFiles === uploadProgress.totalFiles ? 100 : 0;
-        const elapsedSeconds = Math.max(0.25, (Date.now() - uploadProgress.startedAt) / 1000);
-        const speed = uploadProgress.uploadedBytes / elapsedSeconds;
-        return <div className="upload-progress-panel">
-          <div className="upload-progress-heading"><span>正在上传 {uploadProgress.currentFile}</span><strong>{percent.toFixed(0)}%</strong></div>
-          <div className="upload-progress-track"><div className="upload-progress-fill" style={{ width: `${percent}%` }} /></div>
-          <div className="upload-progress-meta">
-            <span>{formatBytes(uploadProgress.uploadedBytes)} / {formatBytes(uploadProgress.totalBytes)} · {formatBytes(speed)}/s{uploadProgress.totalFiles > 1 ? ` · ${uploadProgress.completedFiles} / ${uploadProgress.totalFiles} 个文件` : ""}</span>
-            <button type="button" className="ghost-button" disabled={uploadProgress.cancelling} onClick={() => {
-              setUploadProgress((current) => current ? { ...current, cancelling: true } : current);
-              void cancelUpload(uploadProgress.transferId);
-            }}>{uploadProgress.cancelling ? "取消中..." : "取消"}</button>
-          </div>
-        </div>;
-      })() : null}
+      {queueVisible ? (
+        <div id={`transfer-queue-${tabId}`} className="file-transfer-queue-panel">
+          <TransferQueue transferSessionId={transferSessionId} compact />
+        </div>
+      ) : null}
 
       {notice ? <div className="file-transfer-note">{notice}</div> : null}
 
@@ -490,9 +502,16 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
       {state.status === "error" ? (
         <div className="file-transfer-message file-transfer-error">
           <div>目录加载失败：{state.error.message}</div>
-          <button type="button" className="ghost-button" onClick={() => void loadDirectory()}>
-            重试
-          </button>
+          {(state.error.code === "host_key_unknown" || state.error.code === "host_key_mismatch") ? (
+            <button type="button" className="ghost-button" onClick={() => void handleTrustHostKey(state.error)}>
+              {state.error.code === "host_key_mismatch" ? "核对并更新密钥" : "核对并信任"}
+            </button>
+          ) : null}
+          {state.error.code !== "host_key_unknown" && state.error.code !== "host_key_mismatch" ? (
+            <button type="button" className="ghost-button" onClick={() => void loadDirectory()}>
+              重试
+            </button>
+          ) : null}
         </div>
       ) : null}
 

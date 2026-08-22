@@ -1,5 +1,6 @@
 use crate::contracts::{HostId, SessionId, SshDataEvent};
 use crate::repositories::recent_session_repository::RecentSessionRepository;
+use crate::ssh::host_key::HostKeyStore;
 use std::sync::Arc;
 use tauri::ipc::Channel;
 
@@ -49,4 +50,5 @@ pub struct SessionWorkerInput {
     pub command_rx: std::sync::mpsc::Receiver<SessionCommand>,
     pub on_data: Channel<SshDataEvent>,
     pub recent_repo: Arc<RecentSessionRepository>,
+    pub host_key_store: Arc<HostKeyStore>,
 }

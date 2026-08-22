@@ -6,12 +6,19 @@ import { parseQuickConnectCommand, type QuickConnectTarget } from "../../hosts/q
 
 type AppTitleBarProps = {
   sidebarVisible: boolean;
+  settingsOpen: boolean;
   onToggleSidebar: () => void;
+  onOpenSettings: () => void;
 };
 
 const appWindow = getCurrentWindow();
 
-export function AppTitleBar({ sidebarVisible, onToggleSidebar }: AppTitleBarProps) {
+export function AppTitleBar({
+  sidebarVisible,
+  settingsOpen,
+  onToggleSidebar,
+  onOpenSettings
+}: AppTitleBarProps) {
   const [command, setCommand] = useState("");
   const [commandError, setCommandError] = useState<string>();
   const [quickConnectTarget, setQuickConnectTarget] = useState<QuickConnectTarget | null>(null);
@@ -65,6 +72,20 @@ export function AppTitleBar({ sidebarVisible, onToggleSidebar }: AppTitleBarProp
       </form>
 
       <div className="titlebar-window-controls">
+        <button
+          type="button"
+          className={`titlebar-button titlebar-settings-button${settingsOpen ? " active" : ""}`}
+          onClick={onOpenSettings}
+          title={settingsOpen ? "关闭设置" : "打开设置"}
+          aria-label={settingsOpen ? "关闭设置" : "打开设置"}
+          aria-haspopup="dialog"
+          aria-expanded={settingsOpen}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9.7 2.8h4.6l.5 2a8 8 0 0 1 1.4.8l2-.6 2.3 4-1.5 1.4a8 8 0 0 1 0 1.6l1.5 1.4-2.3 4-2-.6a8 8 0 0 1-1.4.8l-.5 2H9.7l-.5-2a8 8 0 0 1-1.4-.8l-2 .6-2.3-4L5 12a8 8 0 0 1 0-1.6L3.5 9l2.3-4 2 .6a8 8 0 0 1 1.4-.8l.5-2Z" />
+            <circle cx="12" cy="11.2" r="3" />
+          </svg>
+        </button>
         <button
           type="button"
           className="titlebar-button"

@@ -17,6 +17,14 @@ export async function listHosts(filter?: HostFilter): Promise<HostListResult> {
   }
 }
 
+export async function getHost(hostId: string): Promise<HostDto> {
+  try {
+    return await invoke<HostDto>("get_host", { hostId });
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
 export async function createHost(input: CreateHostInput): Promise<HostDto> {
   try {
     return await invoke<HostDto>("create_host", { input });

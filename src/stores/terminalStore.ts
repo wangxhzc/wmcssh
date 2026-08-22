@@ -22,6 +22,7 @@ export type TerminalTab = WorkspaceTabBase & {
   status: TabStatus;
   errorMessage?: string;
   errorCode?: AppErrorCode;
+  errorDetails?: string;
 };
 
 export type FileTransferTab = WorkspaceTabBase & {
@@ -39,7 +40,7 @@ type TerminalStore = {
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
   bindFileTransferSession: (tabId: TabId, transferSessionId: SessionId) => void;
   replaceSession: (tabId: TabId, newSessionId: SessionId) => void;
-  setTabStatus: (tabId: TabId, status: TabStatus, errorMessage?: string, errorCode?: AppErrorCode) => void;
+  setTabStatus: (tabId: TabId, status: TabStatus, errorMessage?: string, errorCode?: AppErrorCode, errorDetails?: string) => void;
   setActiveTab: (tabId: TabId) => void;
   markClosing: (tabId: TabId) => void;
   removeTab: (tabId: TabId) => void;
@@ -115,10 +116,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     get().bindSession(tabId, newSessionId);
   },
 
-  setTabStatus(tabId, status, errorMessage, errorCode) {
+  setTabStatus(tabId, status, errorMessage, errorCode, errorDetails) {
     set((state) => ({
       tabs: state.tabs.map((tab) =>
-        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, status, errorMessage, errorCode } : tab
+        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, status, errorMessage, errorCode, errorDetails } : tab
       )
     }));
   },

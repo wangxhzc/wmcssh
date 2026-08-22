@@ -28,6 +28,7 @@ export function HostSidebar() {
   const [hostMenu, setHostMenu] = useState<HostMenuState>(null);
   const hostMenuRef = useRef<HTMLDivElement | null>(null);
   const statusTimerRef = useRef<number | undefined>(undefined);
+  const searchInitializedRef = useRef(false);
   const hostMenuPosition = useAnchoredMenuPosition(hostMenu, hostMenuRef);
 
   useEffect(() => {
@@ -37,6 +38,19 @@ export function HostSidebar() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!searchInitializedRef.current) {
+      searchInitializedRef.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void loadHosts().catch((error) => {
+        showStatusMessage(`搜索失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [keyword, loadHosts]);
 
   useEffect(() => {
     if (!hostMenu) return;
@@ -97,8 +111,12 @@ export function HostSidebar() {
   };
 
   const copyText = async (text: string) => {
-    await navigator.clipboard.writeText(text);
-    showStatusMessage("已复制到剪贴板");
+    try {
+      await navigator.clipboard.writeText(text);
+      showStatusMessage("已复制到剪贴板");
+    } catch (error) {
+      showStatusMessage(`复制失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const createCopyHostName = (sourceName: string) => {
@@ -158,6 +176,12 @@ export function HostSidebar() {
           role="button"
           tabIndex={0}
           onClick={() => void connectHost(host)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              void connectHost(host);
+            }
+          }}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -242,6 +266,8 @@ export function HostSidebar() {
                 });
                 await loadHosts();
                 showStatusMessage(`已复制主机为「${copiedName}」`);
+              } catch (error) {
+                showStatusMessage(`复制失败：${error instanceof Error ? error.message : String(error)}`);
               } finally {
                 setBusyHostId(undefined);
               }
@@ -263,6 +289,8 @@ export function HostSidebar() {
                 await deleteHost(hostMenu.host.id);
                 await loadHosts();
                 showStatusMessage(`已删除主机「${hostMenu.host.name}」`);
+              } catch (error) {
+                showStatusMessage(`删除失败：${error instanceof Error ? error.message : String(error)}`);
               } finally {
                 setBusyHostId(undefined);
               }

@@ -14,23 +14,11 @@ export function App() {
   const loadTerminalSettings = useSettingsStore((state) => state.loadTerminalSettings);
 
   useEffect(() => {
-    const handleContextMenu = (event: MouseEvent) => {
-      event.preventDefault();
-    };
-
-    window.addEventListener("contextmenu", handleContextMenu);
-
-    return () => {
-      window.removeEventListener("contextmenu", handleContextMenu);
-    };
-  }, []);
-
-  useEffect(() => {
-    void loadHosts();
+    void loadHosts().catch(() => undefined);
   }, [loadHosts]);
 
   useEffect(() => {
-    void loadTerminalSettings();
+    void loadTerminalSettings().catch(() => undefined);
   }, [loadTerminalSettings]);
 
   return <><AppShell /><ConnectionCredentialsDialog />{!vaultUnlocked ? <VaultUnlockDialog onUnlocked={handleVaultUnlocked} /> : null}</>;

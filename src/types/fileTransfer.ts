@@ -1,5 +1,6 @@
 import type { HostId, SessionId } from "./common";
 import type { AppErrorDto } from "./errors";
+import type { AuthType } from "./host";
 
 export type RemoteFileEntryType = "directory" | "file" | "symlink" | "other";
 
@@ -31,11 +32,6 @@ export type UploadRemoteFileInput = {
   localFilePath: string;
 };
 
-export type RemoteDirectoryFilePayload = {
-  relativePath: string;
-  contentBase64: string;
-};
-
 export type UploadRemoteDirectoryFilePayload = {
   relativePath: string;
   localFilePath: string;
@@ -50,40 +46,52 @@ export type UploadRemoteDirectoryInput = {
   files: UploadRemoteDirectoryFilePayload[];
 };
 
-export type UploadProgress = {
+export type TransferDirection = "upload" | "download";
+
+export type TransferStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export type TransferProgress = {
   transferId: string;
-  uploadedBytes: number;
+  status: TransferStatus;
+  transferredBytes: number;
   totalBytes: number;
-  currentFile: string;
+  currentFile: string | null;
   completedFiles: number;
   totalFiles: number;
 };
 
-export type DownloadRemoteFileInput = {
-  transferSessionId: SessionId;
-  remoteFilePath: string;
-};
-
-export type DownloadRemoteFileResult = {
-  fileName: string;
-  contentBase64: string;
-};
-
 export type DownloadRemotePathInput = {
+  transferId: string;
   transferSessionId: SessionId;
   remotePath: string;
+  localPath: string;
 };
 
-export type DownloadRemotePathResult = {
-  name: string;
-  entryType: RemoteFileEntryType;
-  contentBase64?: string;
-  directories: string[];
-  files: RemoteDirectoryFilePayload[];
+export type TransferTask = {
+  transferId: string;
+  transferSessionId: SessionId;
+  direction: TransferDirection;
+  status: TransferStatus;
+  sourcePath: string;
+  destinationPath: string;
+  transferredBytes: number;
+  totalBytes: number;
+  currentFile: string | null;
+  completedFiles: number;
+  totalFiles: number;
+  error: AppErrorDto | null;
+  createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
 };
 
 export type OpenFileTransferSessionInput = {
   hostId: HostId;
+  username?: string;
+  authType?: AuthType;
+  password?: string;
+  privateKeyPath?: string;
+  privateKeyPassphrase?: string;
 };
 
 export type OpenFileTransferSessionResult = {

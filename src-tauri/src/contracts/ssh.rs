@@ -52,6 +52,51 @@ pub struct SshDisconnectInput {
     pub session_id: SessionId,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustHostKeyInput {
+    pub host_id: HostId,
+    pub expected_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostKeyChallenge {
+    pub hostname: String,
+    pub port: u16,
+    pub key_type: String,
+    pub fingerprint: String,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedHostKey {
+    pub id: String,
+    pub host_patterns: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    pub key_type: String,
+    pub fingerprint: String,
+    pub hashed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTrustedHostKeyInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTrustedHostKeyResult {
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "event", content = "data")]
 pub enum SshDataEvent {

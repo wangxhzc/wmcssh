@@ -13,6 +13,7 @@ import { terminalRegistry } from "./terminalRegistry";
 import { requestConnectionCredentials, type ConnectionCredentials } from "../hosts/connectionCredentials";
 import { updateHost } from "../../services/tauri/hostApi";
 import { useHostStore } from "../../stores/hostStore";
+import { confirmAndTrustHostKey } from "../hosts/hostKeyTrust";
 
 const INPUT_FLUSH_DELAY_MS = 10;
 const MAX_INPUT_FLUSH_CHARS = 1024;
@@ -188,7 +189,7 @@ export function queueTerminalInput(tabId: string, data: string) {
   scheduleTerminalInputFlush(tabId);
 }
 
-async function rememberConnectionCredentials(host: HostDto, credentials: ConnectionCredentials) {
+export async function rememberConnectionCredentials(host: HostDto, credentials: ConnectionCredentials) {
   if (credentials.rememberUsername || credentials.rememberAuth) {
     host = await updateHost(host.id, {
       username: credentials.rememberUsername ? credentials.username?.trim() : undefined,
@@ -344,6 +345,11 @@ export async function reconnectTab(tabId: string) {
 
   store.setTabStatus(tabId, "reconnecting");
   stopTerminalInput(tabId, "tab_reconnecting");
+  const oldSessionId = tab.sessionId;
+  if (oldSessionId) {
+    await sshDisconnect({ sessionId: oldSessionId }).catch(() => undefined);
+    sessionTabIndex.unbind(oldSessionId);
+  }
 
   const onData = new Channel<SshDataEvent>();
   terminalRegistry.bindDataChannel(tabId, onData);
@@ -359,7 +365,6 @@ export async function reconnectTab(tabId: string) {
   };
 
   try {
-    const oldSessionId = tab.sessionId;
     const { sessionId: newSessionId } = await sshConnect(
       { hostId: tab.hostId, initialCols: DEFAULT_TERMINAL_COLS, initialRows: DEFAULT_TERMINAL_ROWS },
       onData
@@ -375,5 +380,23 @@ export async function reconnectTab(tabId: string) {
     if (appError.code === "auth_failed" || appError.code === "secret_not_found" || appError.code === "host_invalid") {
       void retryAuthentication(tabId, appError.message);
     }
+  }
+}
+
+export async function trustHostKeyAndReconnect(tabId: string) {
+  const store = useTerminalStore.getState();
+  const tab = store.tabs.find((item) => item.tabId === tabId);
+  if (!tab || tab.kind !== "terminal" || !tab.errorCode || !tab.errorMessage) return;
+  try {
+    const trusted = await confirmAndTrustHostKey(tab.hostId, {
+      code: tab.errorCode,
+      message: tab.errorMessage,
+      details: tab.errorDetails,
+      retryable: false
+    });
+    if (trusted) await reconnectTab(tabId);
+  } catch (error) {
+    const appError = normalizeAppError(error);
+    store.setTabStatus(tabId, "error", appError.message, appError.code, appError.details);
   }
 }

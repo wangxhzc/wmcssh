@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use services::file_transfer_service::FileTransferService;
 use services::host_service::HostService;
 use services::settings_service::SettingsService;
+use ssh::host_key::HostKeyStore;
 use ssh::session_manager::SessionManager;
 use std::sync::Arc;
 use tauri::{Manager, PhysicalSize, WindowEvent};
@@ -89,7 +90,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             restore_window_size(app);
             if let Some(window) = app.get_webview_window("main") {
@@ -113,16 +113,20 @@ pub fn run() {
                     .map_err(|err| anyhow::anyhow!("failed to get app data dir: {err}"))?;
                 std::fs::create_dir_all(&app_dir)?;
                 let secret_cache_path = app_dir.join("wmcssh.json");
+                let host_key_store = Arc::new(HostKeyStore::new(app_dir.join("known_hosts")));
                 let vault = Arc::new(EncryptedSecretStore::new(db.clone(), secret_cache_path));
                 let secret_store: secrets::secret_store::DynSecretStore = vault.clone();
 
                 let host_service =
                     Arc::new(HostService::new(host_repo.clone(), secret_store.clone()));
-                let file_transfer_service =
-                    Arc::new(FileTransferService::new(host_service.clone()));
+                let file_transfer_service = Arc::new(FileTransferService::new(
+                    host_service.clone(),
+                    host_key_store.clone(),
+                ));
                 let session_manager = Arc::new(SessionManager::new(
                     host_service.clone(),
                     recent_repo.clone(),
+                    host_key_store.clone(),
                 ));
                 let settings_service = Arc::new(SettingsService::new(settings_repo));
 
@@ -135,6 +139,7 @@ pub fn run() {
                     settings_service,
                     secret_store,
                     vault,
+                    host_key_store,
                 };
 
                 app_handle.manage(state);
@@ -159,15 +164,19 @@ pub fn run() {
             ssh_open_file_transfer_session,
             ssh_close_file_transfer_session,
             ssh_list_remote_directory,
-            ssh_upload_remote_file,
-            ssh_upload_remote_directory,
-            ssh_cancel_upload,
-            ssh_download_remote_file,
-            ssh_download_remote_path,
+            ssh_enqueue_upload_remote_file,
+            ssh_enqueue_upload_remote_directory,
+            ssh_enqueue_download_remote_path,
+            ssh_list_transfer_tasks,
+            ssh_get_transfer_task,
+            ssh_cancel_transfer,
             ssh_connect,
             ssh_write,
             ssh_resize,
             ssh_disconnect,
+            ssh_trust_host_key,
+            ssh_list_trusted_host_keys,
+            ssh_delete_trusted_host_key,
             get_terminal_settings,
             update_terminal_settings,
             reset_terminal_settings,

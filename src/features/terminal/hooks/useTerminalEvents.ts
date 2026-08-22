@@ -7,6 +7,9 @@ function errorMessage(code: string, fallback: string) {
   switch (code) {
     case "secret_not_found": return "保存的认证凭据不存在或已失效";
     case "host_invalid": return `主机配置不完整：${fallback}`;
+    case "host_key_unknown": return fallback || "首次连接，需要确认服务器主机密钥";
+    case "host_key_mismatch": return fallback || "服务器主机密钥与已信任记录不一致";
+    case "host_key_verification_failed": return fallback || "无法验证服务器主机密钥";
     case "network_unreachable": return `无法连接到主机：${fallback}`;
     case "timeout": return "SSH 连接超时，请检查网络或连接超时设置";
     case "session_not_found": return "SSH 会话状态已失效，请重新连接";
@@ -70,7 +73,7 @@ export function useTerminalEvents() {
       }
 
       stopTerminalInputBySessionId(payload.sessionId, "ssh_error_event");
-      setTabStatus(tab.tabId, "error", message, payload.error.code);
+      setTabStatus(tab.tabId, "error", message, payload.error.code, payload.error.details);
       if (payload.error.code === "auth_failed" || payload.error.code === "secret_not_found") {
         void retryAuthentication(tab.tabId, message);
       } else if (payload.error.code === "host_invalid" && /username|private key|password/i.test(payload.error.message)) {

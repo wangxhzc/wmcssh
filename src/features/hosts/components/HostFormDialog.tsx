@@ -134,6 +134,15 @@ export function HostFormDialog({ open, onClose, host }: HostFormDialogProps) {
     }
   }, [host, open]);
 
+  useEffect(() => {
+    if (!open || submitting) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open, submitting]);
+
   if (!open) return null;
 
   const updateField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -179,14 +188,14 @@ export function HostFormDialog({ open, onClose, host }: HostFormDialogProps) {
   };
 
   return (
-    <div className="dialog-overlay" role="presentation" onClick={onClose}>
+    <div className="dialog-overlay" role="presentation" onClick={() => { if (!submitting) onClose(); }}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="host-form-title" onClick={(event) => event.stopPropagation()}>
         <div className="dialog-header">
           <div>
             <div className="dialog-kicker">Host</div>
             <h3 id="host-form-title">{host ? "编辑主机" : "新建主机"}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭" disabled={submitting}>
             ×
           </button>
         </div>
