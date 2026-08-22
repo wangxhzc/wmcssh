@@ -15,6 +15,8 @@ export type TerminalViewProps = {
 export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+  const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
   const middlePasteLockRef = useRef<number>(0);
   const terminalSettings = useSettingsStore((state) => state.terminalSettings);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -209,6 +211,67 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
   }, [tabId, sessionId]);
 
   useEffect(() => {
+    const runtime = terminalRegistry.get(tabId);
+    const track = scrollbarTrackRef.current;
+    const thumb = scrollbarThumbRef.current;
+    if (!runtime || !track || !thumb) return;
+
+    const updateScrollbar = () => {
+      const buffer = runtime.terminal.buffer.active;
+      const trackHeight = track.clientHeight;
+      const totalLines = Math.max(runtime.terminal.rows, buffer.baseY + runtime.terminal.rows);
+      const thumbHeight = Math.max(28, Math.round(trackHeight * runtime.terminal.rows / totalLines));
+      const availableTravel = Math.max(0, trackHeight - thumbHeight);
+      const thumbTop = buffer.baseY > 0
+        ? Math.round(availableTravel * buffer.viewportY / buffer.baseY)
+        : 0;
+
+      thumb.style.height = `${Math.min(trackHeight, thumbHeight)}px`;
+      thumb.style.transform = `translateY(${thumbTop}px)`;
+    };
+
+    let dragOffset = 0;
+    const scrollFromPointer = (clientY: number) => {
+      const bounds = track.getBoundingClientRect();
+      const thumbHeight = thumb.offsetHeight;
+      const availableTravel = Math.max(0, bounds.height - thumbHeight);
+      const top = Math.min(availableTravel, Math.max(0, clientY - bounds.top - dragOffset));
+      const maxScroll = runtime.terminal.buffer.active.baseY;
+      runtime.terminal.scrollToLine(availableTravel > 0 ? Math.round(maxScroll * top / availableTravel) : 0);
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const thumbBounds = thumb.getBoundingClientRect();
+      dragOffset = event.target === thumb
+        ? event.clientY - thumbBounds.top
+        : thumbBounds.height / 2;
+      track.setPointerCapture(event.pointerId);
+      scrollFromPointer(event.clientY);
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!track.hasPointerCapture(event.pointerId)) return;
+      event.preventDefault();
+      scrollFromPointer(event.clientY);
+    };
+
+    const scrollDisposable = runtime.terminal.onScroll(updateScrollbar);
+    const writeDisposable = runtime.terminal.onWriteParsed(updateScrollbar);
+    const resizeDisposable = runtime.terminal.onResize(updateScrollbar);
+    track.addEventListener("pointerdown", handlePointerDown);
+    track.addEventListener("pointermove", handlePointerMove);
+    requestAnimationFrame(updateScrollbar);
+
+    return () => {
+      scrollDisposable.dispose();
+      writeDisposable.dispose();
+      resizeDisposable.dispose();
+      track.removeEventListener("pointerdown", handlePointerDown);
+      track.removeEventListener("pointermove", handlePointerMove);
+    };
+  }, [tabId]);
+
+  useEffect(() => {
     if (active) {
       const runtime = terminalRegistry.get(tabId);
       runtime?.terminal.focus();
@@ -318,6 +381,9 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
           });
         }}
       />
+      <div ref={scrollbarTrackRef} className="terminal-scrollbar" aria-hidden="true">
+        <div ref={scrollbarThumbRef} className="terminal-scrollbar-thumb" />
+      </div>
       {contextMenu ? (
         <div
           ref={menuRef}

@@ -124,7 +124,9 @@ textarea::placeholder {
   border-right: 1px solid var(--border);
   background: var(--sidebar-bg);
   padding: 8px 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
   position: relative;
 }
 
@@ -376,7 +378,7 @@ textarea::placeholder {
 .terminal-pane {
   position: relative;
   min-height: 0;
-  background: black;
+  background: var(--app-bg);
 }
 
 .file-transfer-view {
@@ -486,7 +488,8 @@ textarea::placeholder {
 }
 
 .terminal-root {
-  padding: 0 8px;
+  padding: 0 20px 3px 8px;
+  background: var(--app-bg);
   font-family:
     "AppTerminalMono",
     "Sarasa Mono SC",
@@ -500,6 +503,87 @@ textarea::placeholder {
     "PingFang SC",
     "Hiragino Sans GB",
     monospace;
+}
+
+.terminal-root .xterm,
+.terminal-root .xterm-viewport,
+.terminal-root .xterm-screen {
+  background-color: var(--app-bg) !important;
+}
+
+.sidebar {
+  overflow-y: scroll !important;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--weak) var(--panel-bg);
+  scrollbar-width: auto;
+  color-scheme: dark;
+}
+
+.sidebar::-webkit-scrollbar {
+  display: block;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  display: block;
+  -webkit-appearance: none;
+  background: var(--panel-bg);
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  display: block;
+  -webkit-appearance: none;
+  min-height: 28px;
+  border: 3px solid var(--panel-bg);
+  border-radius: 6px;
+  background-color: var(--muted);
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text);
+}
+
+.sidebar::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.terminal-root .xterm-viewport {
+  scrollbar-width: none;
+}
+
+.terminal-root .xterm-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.terminal-scrollbar {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 4px;
+  bottom: 3px;
+  width: 12px;
+  background: var(--panel-bg);
+  cursor: default;
+  touch-action: none;
+}
+
+.terminal-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  left: 2px;
+  width: 8px;
+  min-height: 28px;
+  border-radius: 4px;
+  background: var(--muted);
+}
+
+.terminal-scrollbar:hover .terminal-scrollbar-thumb {
+  background: var(--text);
 }
 
 .terminal-root,

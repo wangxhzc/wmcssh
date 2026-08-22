@@ -31,6 +31,11 @@ const DEFAULT_TERMINAL_THEME = {
   brightWhite: "#E4E4E4"
 } as const;
 
+const ERASE_SCROLLBACK_SEQUENCES = [
+  new Uint8Array([0x1b, 0x5b, 0x33, 0x4a]),
+  new Uint8Array([0x9b, 0x33, 0x4a])
+] as const;
+
 export type TerminalRuntime = {
   tabId: string;
   sessionId?: string;
@@ -47,11 +52,60 @@ class TerminalRegistry {
   private pendingWriteBytes = new Map<string, number>();
   private flushTimers = new Map<string, number>();
   private writingTabs = new Set<string>();
+  private catchingUpTabs = new Set<string>();
+  private terminalVisibility = new Map<string, string>();
+  private escapeSequenceTails = new Map<string, Uint8Array>();
+  private windowActive = document.hasFocus() && document.visibilityState === "visible";
   private terminalSettings: TerminalSettingsDto = defaultTerminalSettings;
   private readonly maxBytesPerFlush = 32 * 1024;
   private readonly maxPendingBytes = 4 * 1024 * 1024;
   private readonly minLetterSpacing = -1;
   private readonly maxLetterSpacing = 1;
+
+  constructor() {
+    window.addEventListener("blur", this.handleWindowBlur);
+    window.addEventListener("focus", this.handleWindowFocus);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+  }
+
+  private handleWindowBlur = () => {
+    this.windowActive = false;
+    for (const tabId of this.runtimes.keys()) {
+      this.clearFlushTimer(tabId);
+    }
+  };
+
+  private handleWindowFocus = () => {
+    if (document.visibilityState !== "visible") return;
+    this.resumeWindowOutput();
+  };
+
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === "visible" && document.hasFocus()) {
+      this.resumeWindowOutput();
+      return;
+    }
+
+    this.handleWindowBlur();
+  };
+
+  private resumeWindowOutput() {
+    if (this.windowActive) return;
+    this.windowActive = true;
+
+    for (const [tabId, runtime] of this.runtimes) {
+      const pending = this.pendingWrites.get(tabId);
+      if (!runtime.mounted || !pending?.length) continue;
+
+      const element = runtime.terminal.element;
+      if (element) {
+        this.terminalVisibility.set(tabId, element.style.visibility);
+        element.style.visibility = "hidden";
+      }
+      this.catchingUpTabs.add(tabId);
+      this.flushPendingWrites(tabId);
+    }
+  }
 
   private normalizeLetterSpacing(value: number) {
     return Math.min(this.maxLetterSpacing, Math.max(this.minLetterSpacing, value));
@@ -137,6 +191,9 @@ class TerminalRegistry {
   }
 
   writeByTabId(tabId: string, data: Uint8Array | string) {
+    data = this.preserveScrollback(tabId, data);
+    if (data.length === 0) return;
+
     const pending = this.pendingWrites.get(tabId) ?? [];
     pending.push(data);
     this.pendingWrites.set(tabId, pending);
@@ -177,10 +234,14 @@ class TerminalRegistry {
     this.pendingWrites.delete(tabId);
     this.pendingWriteBytes.delete(tabId);
     this.writingTabs.delete(tabId);
+    this.catchingUpTabs.delete(tabId);
+    this.terminalVisibility.delete(tabId);
+    this.escapeSequenceTails.delete(tabId);
     this.clearFlushTimer(tabId);
   }
 
   private scheduleFlush(tabId: string) {
+    if (!this.windowActive) return;
     if (this.flushTimers.has(tabId)) return;
 
     const timer = window.requestAnimationFrame(() => {
@@ -207,7 +268,9 @@ class TerminalRegistry {
     const pending = this.pendingWrites.get(tabId);
     if (!pending || pending.length === 0) return;
 
-    const chunk = pending[0];
+    const chunk = this.catchingUpTabs.has(tabId)
+      ? this.mergePendingWrites(pending)
+      : pending[0];
     const chunkLength = typeof chunk === "string" ? chunk.length : chunk.byteLength;
 
     let writeChunk: Uint8Array | string = chunk;
@@ -233,6 +296,7 @@ class TerminalRegistry {
       if (!latestRuntime?.mounted) {
         this.pendingWrites.delete(tabId);
         this.pendingWriteBytes.delete(tabId);
+        this.finishCatchUp(tabId);
         return;
       }
 
@@ -240,10 +304,15 @@ class TerminalRegistry {
       if (!remaining || remaining.length === 0) {
         this.pendingWrites.delete(tabId);
         this.pendingWriteBytes.delete(tabId);
+        this.finishCatchUp(tabId);
         return;
       }
 
-      this.scheduleFlush(tabId);
+      if (this.catchingUpTabs.has(tabId)) {
+        this.flushPendingWrites(tabId);
+      } else {
+        this.scheduleFlush(tabId);
+      }
     };
 
     try {
@@ -254,6 +323,92 @@ class TerminalRegistry {
       console.error("[wmcssh][terminal] terminal.write failed", error);
       handleWriteComplete();
     }
+  }
+
+  private mergePendingWrites(pending: Array<Uint8Array | string>): Uint8Array | string {
+    if (pending.every((item) => typeof item === "string")) {
+      const merged = (pending as string[]).join("");
+      pending.splice(0, pending.length, merged);
+      return merged;
+    }
+
+    if (pending.every((item) => item instanceof Uint8Array)) {
+      const byteChunks = pending as Uint8Array[];
+      const totalBytes = byteChunks.reduce((sum, item) => sum + item.byteLength, 0);
+      const merged = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const item of byteChunks) {
+        merged.set(item, offset);
+        offset += item.byteLength;
+      }
+      pending.splice(0, pending.length, merged);
+      return merged;
+    }
+
+    return pending[0];
+  }
+
+  private finishCatchUp(tabId: string) {
+    if (!this.catchingUpTabs.delete(tabId)) return;
+
+    const runtime = this.runtimes.get(tabId);
+    const element = runtime?.terminal.element;
+    if (element) {
+      element.style.visibility = this.terminalVisibility.get(tabId) ?? "";
+    }
+    this.terminalVisibility.delete(tabId);
+    if (runtime?.mounted) {
+      runtime.terminal.refresh(0, Math.max(0, runtime.terminal.rows - 1));
+    }
+  }
+
+  private preserveScrollback(tabId: string, data: Uint8Array | string): Uint8Array | string {
+    if (typeof data === "string") {
+      return data.split("\u001b[3J").join("").split("\u009b3J").join("");
+    }
+
+    const tail = this.escapeSequenceTails.get(tabId);
+    const combined = new Uint8Array((tail?.byteLength ?? 0) + data.byteLength);
+    if (tail) combined.set(tail, 0);
+    combined.set(data, tail?.byteLength ?? 0);
+
+    let retainedBytes = 0;
+    for (const sequence of ERASE_SCROLLBACK_SEQUENCES) {
+      for (let length = 1; length < sequence.byteLength; length += 1) {
+        if (length > combined.byteLength) break;
+        const offset = combined.byteLength - length;
+        let matches = true;
+        for (let index = 0; index < length; index += 1) {
+          if (combined[offset + index] !== sequence[index]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) retainedBytes = Math.max(retainedBytes, length);
+      }
+    }
+
+    const processLength = combined.byteLength - retainedBytes;
+    const output = combined.slice(0, processLength);
+    for (const sequence of ERASE_SCROLLBACK_SEQUENCES) {
+      for (let offset = 0; offset <= output.byteLength - sequence.byteLength; offset += 1) {
+        let matches = true;
+        for (let index = 0; index < sequence.byteLength; index += 1) {
+          if (output[offset + index] !== sequence[index]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) output.fill(0, offset, offset + sequence.byteLength);
+      }
+    }
+
+    if (retainedBytes > 0) {
+      this.escapeSequenceTails.set(tabId, combined.slice(processLength));
+    } else {
+      this.escapeSequenceTails.delete(tabId);
+    }
+    return output;
   }
 
   private dropOldestPendingWrites(tabId: string, bytesToDrop: number) {
