@@ -6,6 +6,7 @@ import { openFileTransferTab } from "../../file-transfer/actions";
 import { HostFormDialog } from "./HostFormDialog";
 import type { HostDto } from "../../../types/host";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
+import { CustomScrollbar } from "../../../app/CustomScrollbar";
 
 type HostMenuState = {
   host: HostDto;
@@ -27,6 +28,7 @@ export function HostSidebar() {
   const [statusMessage, setStatusMessage] = useState<string>();
   const [hostMenu, setHostMenu] = useState<HostMenuState>(null);
   const hostMenuRef = useRef<HTMLDivElement | null>(null);
+  const sidebarRef = useRef<HTMLElement | null>(null);
   const statusTimerRef = useRef<number | undefined>(undefined);
   const searchInitializedRef = useRef(false);
   const hostMenuPosition = useAnchoredMenuPosition(hostMenu, hostMenuRef);
@@ -136,7 +138,8 @@ export function HostSidebar() {
   };
 
   return (
-    <aside className="sidebar" onClick={closeHostMenu} onContextMenu={closeHostMenu}>
+    <div className="sidebar-scroll-area">
+      <aside ref={sidebarRef} className="sidebar" onClick={closeHostMenu} onContextMenu={closeHostMenu}>
       <div className="sidebar-heading">
         <span>主机</span>
         <span className="sidebar-count">{hosts.length}</span>
@@ -300,6 +303,8 @@ export function HostSidebar() {
           </button>
         </div>
       ) : null}
-    </aside>
+      </aside>
+      <CustomScrollbar scrollRef={sidebarRef} />
+    </div>
   );
 }

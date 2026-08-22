@@ -11,6 +11,7 @@ import {
 } from "../../../services/tauri/fileTransferApi";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import { useTransferQueueStore } from "../../../stores/transferQueueStore";
+import { CustomScrollbar } from "../../../app/CustomScrollbar";
 import { normalizeAppError, type AppErrorDto } from "../../../types/errors";
 import type {
   FileTransferLoadState,
@@ -99,6 +100,7 @@ async function collectLocalDirectoryPayload(rootPath: string) {
 }
 
 export function FileTransferView({ tabId, hostId, transferSessionId, active }: FileTransferViewProps) {
+  const listRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<FileTransferLoadState>({ status: "idle" });
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -520,10 +522,13 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           {state.fallbackToRoot ? (
             <div className="file-transfer-note">未获取到用户家目录，已自动回退到根目录 `/`。</div>
           ) : null}
-          <div className="file-transfer-list">
-            {state.entries.length > 0 ? state.entries.map(renderRow) : (
-              <div className="file-transfer-message">当前目录为空。</div>
-            )}
+          <div className="file-transfer-list-scroll-area">
+            <div ref={listRef} className="file-transfer-list">
+              {state.entries.length > 0 ? state.entries.map(renderRow) : (
+                <div className="file-transfer-message">当前目录为空。</div>
+              )}
+            </div>
+            <CustomScrollbar scrollRef={listRef} />
           </div>
         </>
       ) : null}

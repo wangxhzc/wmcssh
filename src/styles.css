@@ -68,7 +68,39 @@ body,
   box-sizing: border-box;
 }
 
+* {
+  scrollbar-color: var(--muted) var(--panel-bg);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--panel-bg);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 0;
+  background: var(--muted);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 :root {
+  --scrollbar-size: 8px;
+  --terminal-scrollbar-gap: 1px;
   --app-bg: #1c1c1c;
   --sidebar-bg: #181818;
   --panel-bg: #181818;
@@ -121,13 +153,24 @@ textarea::placeholder {
 }
 
 .sidebar {
-  border-right: 1px solid var(--border);
   background: var(--sidebar-bg);
-  padding: 8px 0;
+  padding: 8px calc(var(--scrollbar-size) + var(--terminal-scrollbar-gap)) 8px 0;
   overflow-x: hidden;
   overflow-y: scroll;
-  scrollbar-gutter: stable;
   position: relative;
+}
+
+.sidebar-scroll-area {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+.sidebar-scroll-area .sidebar {
+  width: 100%;
+  height: 100%;
 }
 
 .sidebar-toolbar {
@@ -426,9 +469,16 @@ textarea::placeholder {
   gap: 10px;
 }
 
-.file-transfer-list {
+.file-transfer-list-scroll-area {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+}
+
+.file-transfer-list {
+  width: 100%;
+  height: 100%;
   padding: 10px;
   overflow: auto;
 }
@@ -488,7 +538,7 @@ textarea::placeholder {
 }
 
 .terminal-root {
-  padding: 0 20px 3px 8px;
+  padding: 0 0 1px 8px;
   background: var(--app-bg);
   font-family:
     "AppTerminalMono",
@@ -513,42 +563,22 @@ textarea::placeholder {
 
 .sidebar {
   overflow-y: scroll !important;
-  scrollbar-gutter: stable;
-  scrollbar-color: var(--weak) var(--panel-bg);
-  scrollbar-width: auto;
+  scrollbar-width: none;
   color-scheme: dark;
 }
 
 .sidebar::-webkit-scrollbar {
-  display: block;
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-}
-
-.sidebar::-webkit-scrollbar-track {
-  display: block;
-  -webkit-appearance: none;
-  background: var(--panel-bg);
-}
-
-.sidebar::-webkit-scrollbar-thumb {
-  display: block;
-  -webkit-appearance: none;
-  min-height: 28px;
-  border: 3px solid var(--panel-bg);
-  border-radius: 6px;
-  background-color: var(--muted);
-}
-
-.sidebar::-webkit-scrollbar-thumb:hover {
-  background-color: var(--text);
-}
-
-.sidebar::-webkit-scrollbar-button {
   display: none;
   width: 0;
-  height: 0;
+}
+
+.file-transfer-list {
+  scrollbar-width: none;
+}
+
+.file-transfer-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
 }
 
 .terminal-root .xterm-viewport {
@@ -564,9 +594,9 @@ textarea::placeholder {
   position: absolute;
   z-index: 4;
   top: 0;
-  right: 4px;
-  bottom: 3px;
-  width: 12px;
+  right: 0;
+  bottom: 1px;
+  width: var(--scrollbar-size);
   background: var(--panel-bg);
   cursor: default;
   touch-action: none;
@@ -575,14 +605,44 @@ textarea::placeholder {
 .terminal-scrollbar-thumb {
   position: absolute;
   top: 0;
-  left: 2px;
-  width: 8px;
+  left: 0;
+  width: var(--scrollbar-size);
   min-height: 28px;
-  border-radius: 4px;
+  border-radius: 0;
   background: var(--muted);
 }
 
 .terminal-scrollbar:hover .terminal-scrollbar-thumb {
+  background: var(--text);
+}
+
+.custom-scrollbar {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--scrollbar-size);
+  background: var(--panel-bg);
+  cursor: default;
+  touch-action: none;
+}
+
+.custom-scrollbar.inactive {
+  visibility: hidden;
+}
+
+.custom-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--scrollbar-size);
+  min-height: 28px;
+  border-radius: 0;
+  background: var(--muted);
+}
+
+.custom-scrollbar:hover .custom-scrollbar-thumb {
   background: var(--text);
 }
 

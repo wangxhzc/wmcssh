@@ -216,6 +216,7 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
     const thumb = scrollbarThumbRef.current;
     if (!runtime || !track || !thumb) return;
 
+    let updateFrame = 0;
     const updateScrollbar = () => {
       const buffer = runtime.terminal.buffer.active;
       const trackHeight = track.clientHeight;
@@ -228,6 +229,10 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
 
       thumb.style.height = `${Math.min(trackHeight, thumbHeight)}px`;
       thumb.style.transform = `translateY(${thumbTop}px)`;
+    };
+    const scheduleScrollbarUpdate = () => {
+      window.cancelAnimationFrame(updateFrame);
+      updateFrame = window.requestAnimationFrame(updateScrollbar);
     };
 
     let dragOffset = 0;
@@ -255,17 +260,23 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
       scrollFromPointer(event.clientY);
     };
 
-    const scrollDisposable = runtime.terminal.onScroll(updateScrollbar);
-    const writeDisposable = runtime.terminal.onWriteParsed(updateScrollbar);
-    const resizeDisposable = runtime.terminal.onResize(updateScrollbar);
+    const viewport = containerRef.current?.querySelector<HTMLElement>(".xterm-viewport");
+    const scrollDisposable = runtime.terminal.onScroll(scheduleScrollbarUpdate);
+    const writeDisposable = runtime.terminal.onWriteParsed(scheduleScrollbarUpdate);
+    const resizeDisposable = runtime.terminal.onResize(scheduleScrollbarUpdate);
+    viewport?.addEventListener("scroll", scheduleScrollbarUpdate, { passive: true });
+    containerRef.current?.addEventListener("wheel", scheduleScrollbarUpdate, { passive: true });
     track.addEventListener("pointerdown", handlePointerDown);
     track.addEventListener("pointermove", handlePointerMove);
     requestAnimationFrame(updateScrollbar);
 
     return () => {
+      window.cancelAnimationFrame(updateFrame);
       scrollDisposable.dispose();
       writeDisposable.dispose();
       resizeDisposable.dispose();
+      viewport?.removeEventListener("scroll", scheduleScrollbarUpdate);
+      containerRef.current?.removeEventListener("wheel", scheduleScrollbarUpdate);
       track.removeEventListener("pointerdown", handlePointerDown);
       track.removeEventListener("pointermove", handlePointerMove);
     };
@@ -363,7 +374,10 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
       <div
         ref={containerRef}
         className="terminal-root"
-        style={{ height: "100%", width: "100%" }}
+        style={{
+          height: "100%",
+          width: "calc(100% - var(--scrollbar-size) - var(--terminal-scrollbar-gap))"
+        }}
         data-tab-id={tabId}
         tabIndex={0}
         onMouseDown={(event) => {
