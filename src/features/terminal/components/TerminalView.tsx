@@ -189,17 +189,27 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
     const inputDisposable = runtime.terminal.onData((data) => {
       queueTerminalInput(tabId, data);
     });
+    let selectionCopyTimer: number | undefined;
     const selectionDisposable = runtime.terminal.onSelectionChange(() => {
-      const selection = runtime?.terminal.getSelection();
-      if (!selection) return;
+      // Selection change events fire continuously while dragging. Delay reading
+      // the selected text so a large selection is not repeatedly materialized
+      // and sent across the clipboard IPC boundary on every pointer movement.
+      window.clearTimeout(selectionCopyTimer);
+      selectionCopyTimer = window.setTimeout(() => {
+        const selection = runtime.terminal.getSelection();
+        if (!selection) return;
 
-      void writeText(selection).catch((error) => {
-        console.error("[wmcssh][terminal] failed to copy selection", error);
-      });
+        void writeText(selection).catch((error) => {
+          console.error("[wmcssh][terminal] failed to copy selection", error);
+        });
+      }, 150);
     });
 
     runtime.disposables.push(inputDisposable);
     runtime.disposables.push(selectionDisposable);
+    runtime.disposables.push({
+      dispose: () => window.clearTimeout(selectionCopyTimer)
+    });
 
     requestAnimationFrame(() => terminalRegistry.fit(tabId));
   }, [tabId, terminalSettings]);
