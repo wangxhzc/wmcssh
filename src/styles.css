@@ -1338,15 +1338,34 @@ textarea::placeholder {
 }
 
 .terminal-workspace {
-  grid-template-rows: 36px minmax(0, 1fr) 24px;
+  grid-template-rows: 32px minmax(0, 1fr) 24px;
   background: var(--app-bg);
 }
 
 .tab-bar {
-  gap: 1px;
-  padding: 0 6px;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
   background: var(--app-bg);
   border-bottom-color: var(--panel-bg-2);
+}
+
+.tab-strip {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  gap: 1px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab-strip::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .tab-item {
@@ -1373,6 +1392,64 @@ textarea::placeholder {
   border-bottom-color: var(--accent);
   background: var(--selection-bg);
   color: var(--text);
+}
+
+.tab-list-button {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid transparent;
+  background: var(--app-bg);
+  color: var(--muted);
+  cursor: default;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.tab-list-button.visible {
+  visibility: visible;
+  pointer-events: auto;
+  cursor: pointer;
+  border-left-color: var(--panel-bg-2);
+}
+
+.tab-list-button.visible:hover,
+.tab-list-button.visible[aria-expanded="true"] {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.tab-list-menu {
+  width: 220px;
+  max-height: min(420px, calc(100vh - 56px));
+  overflow-y: auto;
+}
+
+.tab-list-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tab-list-menu button.active {
+  background: var(--selection-bg);
+  color: var(--text);
+}
+
+.tab-list-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-list-kind {
+  flex: 0 0 auto;
+  color: var(--weak);
+  font-size: 11px;
 }
 
 .terminal-status-bar {

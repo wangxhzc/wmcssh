@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useHostStore } from "../../../stores/hostStore";
 import { openFileTransferTab } from "../../file-transfer/actions";
 import { connectHost, closeWorkspaceTab } from "../actions";
@@ -17,22 +17,63 @@ export function TerminalTabBar() {
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
   const hosts = useHostStore((state) => state.hosts);
   const [tabMenu, setTabMenu] = useState<TabMenuState>(null);
+  const [tabListOpen, setTabListOpen] = useState(false);
+  const [tabsOverflow, setTabsOverflow] = useState(false);
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const tabListButtonRef = useRef<HTMLButtonElement | null>(null);
+  const tabListMenuRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const tabMenuPosition = useAnchoredMenuPosition(tabMenu, menuRef);
+  const tabListAnchor = useMemo(() => {
+    if (!tabListOpen || !tabListButtonRef.current) return null;
+    const rect = tabListButtonRef.current.getBoundingClientRect();
+    return { x: rect.right - 220, y: rect.bottom };
+  }, [tabListOpen]);
+  const tabListPosition = useAnchoredMenuPosition(tabListAnchor, tabListMenuRef);
 
   const closeTabMenu = () => setTabMenu(null);
 
   useEffect(() => {
-    if (!tabMenu) return;
+    const strip = tabStripRef.current;
+    if (!strip) return;
+
+    const updateOverflow = () => {
+      setTabsOverflow(strip.scrollWidth > strip.clientWidth + 1);
+    };
+    updateOverflow();
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(strip);
+    for (const child of strip.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [tabs]);
+
+  useEffect(() => {
+    if (!tabsOverflow) setTabListOpen(false);
+  }, [tabsOverflow]);
+
+  useEffect(() => {
+    if (!activeTabId) return;
+    requestAnimationFrame(() => {
+      tabStripRef.current
+        ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(activeTabId)}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  }, [activeTabId]);
+
+  useEffect(() => {
+    if (!tabMenu && !tabListOpen) return;
 
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (menuRef.current?.contains(target)) return;
+      if (tabListMenuRef.current?.contains(target) || tabListButtonRef.current?.contains(target)) return;
       closeTabMenu();
+      setTabListOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         closeTabMenu();
+        setTabListOpen(false);
       }
     };
 
@@ -42,7 +83,16 @@ export function TerminalTabBar() {
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [tabMenu]);
+  }, [tabListOpen, tabMenu]);
+
+  const activateTab = (tabId: string) => {
+    setActiveTab(tabId);
+    requestAnimationFrame(() => {
+      tabStripRef.current
+        ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tabId)}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  };
 
   const renderStatus = (status: string) => {
     return <span className={`tab-status-dot ${status}`} aria-label={status} title={status} />;
@@ -70,36 +120,75 @@ export function TerminalTabBar() {
 
   return (
     <div className="tab-bar">
-      {tabs.map((tab) => (
-        <button
-          key={tab.tabId}
-          className={tab.tabId === activeTabId ? "tab-item active" : "tab-item"}
-          onClick={() => setActiveTab(tab.tabId)}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            setActiveTab(tab.tabId);
-            setTabMenu({
-              tabId: tab.tabId,
-              x: event.clientX,
-              y: event.clientY
-            });
-          }}
-          title={tab.kind === "terminal" ? tab.errorMessage ?? `${tab.title} ${tab.status}` : tab.title}
-        >
-          <span>{tab.title}</span>
-          {tab.kind === "terminal" ? renderStatus(tab.status) : null}
-          <span
-            className="tab-close"
-            onClick={(event) => {
+      <div ref={tabStripRef} className="tab-strip">
+        {tabs.map((tab) => (
+          <button
+            key={tab.tabId}
+            data-tab-id={tab.tabId}
+            className={tab.tabId === activeTabId ? "tab-item active" : "tab-item"}
+            onClick={() => activateTab(tab.tabId)}
+            onContextMenu={(event) => {
+              event.preventDefault();
               event.stopPropagation();
-              void closeWorkspaceTab(tab.tabId);
+              setActiveTab(tab.tabId);
+              setTabMenu({
+                tabId: tab.tabId,
+                x: event.clientX,
+                y: event.clientY
+              });
             }}
+            title={tab.kind === "terminal" ? tab.errorMessage ?? `${tab.title} ${tab.status}` : tab.title}
           >
-            ×
-          </span>
-        </button>
-      ))}
+            <span>{tab.title}</span>
+            {tab.kind === "terminal" ? renderStatus(tab.status) : null}
+            <span
+              className="tab-close"
+              onClick={(event) => {
+                event.stopPropagation();
+                void closeWorkspaceTab(tab.tabId);
+              }}
+            >
+              ×
+            </span>
+          </button>
+        ))}
+      </div>
+      <button
+        ref={tabListButtonRef}
+        type="button"
+        className={`tab-list-button${tabsOverflow ? " visible" : ""}`}
+        aria-label="显示所有标签"
+        title="显示所有标签"
+        aria-expanded={tabListOpen}
+        onClick={() => {
+          closeTabMenu();
+          setTabListOpen((open) => !open);
+        }}
+      >
+        ▾
+      </button>
+      {tabListOpen ? (
+        <div
+          ref={tabListMenuRef}
+          className="app-context-menu tab-list-menu"
+          style={{ left: tabListPosition?.x ?? tabListAnchor?.x, top: tabListPosition?.y ?? tabListAnchor?.y }}
+        >
+          {tabs.map((tab) => (
+            <button
+              key={tab.tabId}
+              type="button"
+              className={tab.tabId === activeTabId ? "active" : ""}
+              onClick={() => {
+                setTabListOpen(false);
+                activateTab(tab.tabId);
+              }}
+            >
+              <span className="tab-list-title">{tab.title}</span>
+              <span className="tab-list-kind">{tab.kind === "terminal" ? tab.status : "文件"}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {tabMenu ? (
         <div
           ref={menuRef}
