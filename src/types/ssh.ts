@@ -30,6 +30,8 @@ export type SshWriteInput = {
   dataBase64: string;
 };
 
+export type SshOutputAckInput = { sessionId: SessionId; bytes: number };
+
 export type SshResizeInput = {
   sessionId: SessionId;
   cols: number;

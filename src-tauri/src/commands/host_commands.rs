@@ -99,3 +99,11 @@ pub async fn duplicate_host(
         }
     }
 }
+
+#[tauri::command]
+pub async fn move_host(
+    state: State<'_, AppState>,
+    input: crate::contracts::MoveHostInput,
+) -> Result<(), AppErrorDto> {
+    state.host_service.move_host(input).await
+}

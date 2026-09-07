@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { sshResize } from "../../../services/tauri/sshApi";
+import { readText, writeText, readPrimarySelection, writePrimarySelection } from "../../../services/tauri/clipboardApi";
+import { terminalClipboardShortcut } from "../clipboardShortcuts";
 import { useSettingsStore } from "../../../stores/settingsStore";
+import { loadTerminalFonts } from "../terminalFonts";
 import { terminalRegistry } from "../terminalRegistry";
 import { queueTerminalInput } from "../actions";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
@@ -12,7 +13,24 @@ export type TerminalViewProps = {
   active: boolean;
 };
 
-export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
+export function TerminalView(props: TerminalViewProps) {
+  const settings = useSettingsStore((state) => state.terminalSettings);
+  const [fontsReady, setFontsReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadTerminalFonts(settings).then(() => {
+      if (!cancelled) setFontsReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [settings]);
+
+  // SSH bytes may already be arriving; the registry keeps parsing them while
+  // the view waits. No terminal buffer or connection is recreated here.
+  return fontsReady ? <TerminalSurface {...props} /> : <div className="terminal-font-loading" role="status">正在加载终端字体…</div>;
+}
+
+function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
@@ -117,74 +135,64 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
       }
     });
 
-    if (element && !isLinux) {
-      const pasteMiddleClick = () => {
-        terminalRegistry.get(tabId)?.terminal.focus();
-        closeContextMenu();
-        void readText()
-          .then((text) => {
-            if (!text) return;
-            queueTerminalInput(tabId, text);
-          })
-          .catch((error) => {
-            console.error("[wmcssh][terminal] failed to paste from middle click", error);
+    const handleMiddleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      middlePasteLockRef.current = Date.now();
+      runtime.terminal.focus();
+      closeContextMenu();
+      void (isLinux ? readPrimarySelection() : readText()).then((text) => {
+        if (text && terminalRegistry.get(tabId) === runtime) runtime.terminal.paste(text);
+      }).catch((error) => console.error("[wmcssh][terminal] middle paste failed", error));
+    };
+    const handleMiddleAuxClick = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      middlePasteLockRef.current = Date.now();
+    };
+    element.addEventListener("mousedown", handleMiddleMouseDown, true);
+    element.addEventListener("auxclick", handleMiddleAuxClick, true);
+    runtime.disposables.push({ dispose: () => {
+      element.removeEventListener("mousedown", handleMiddleMouseDown, true);
+      element.removeEventListener("auxclick", handleMiddleAuxClick, true);
+    } });
+
+    const handleClipboardShortcut = (event: KeyboardEvent) => {
+      const action = terminalClipboardShortcut(event, isLinux);
+      if (!action) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.repeat) return;
+      const selection = runtime.terminal.getSelection();
+      const operation = action === "copy"
+        ? (selection ? writeText(selection) : Promise.resolve())
+        : (action === "pastePrimary" ? readPrimarySelection() : readText()).then((text) => {
+            if (text && terminalRegistry.get(tabId) === runtime) runtime.terminal.paste(text);
           });
-      };
-
-      const handleMiddleMouseDown: EventListener = (event) => {
-        const mouseEvent = event as MouseEvent;
-        if (mouseEvent.button !== 1) return;
-
-        const now = Date.now();
-        if (now - middlePasteLockRef.current < 250) {
-          mouseEvent.preventDefault();
-          mouseEvent.stopPropagation();
-          mouseEvent.stopImmediatePropagation();
-          return;
-        }
-
-        middlePasteLockRef.current = now;
-        mouseEvent.preventDefault();
-        mouseEvent.stopPropagation();
-        mouseEvent.stopImmediatePropagation();
-        pasteMiddleClick();
-        window.setTimeout(() => {
-          if (Date.now() - middlePasteLockRef.current >= 250) {
-            middlePasteLockRef.current = 0;
-          }
-        }, 250);
-      };
-
-      const handleMiddleAuxClick: EventListener = (event) => {
-        const mouseEvent = event as MouseEvent;
-        if (mouseEvent.button !== 1) return;
-
-        mouseEvent.preventDefault();
-        mouseEvent.stopPropagation();
-        mouseEvent.stopImmediatePropagation();
-        if (Date.now() - middlePasteLockRef.current < 250) {
-          return;
-        }
-
-        middlePasteLockRef.current = Date.now();
-        pasteMiddleClick();
-        window.setTimeout(() => {
-          if (Date.now() - middlePasteLockRef.current >= 250) {
-            middlePasteLockRef.current = 0;
-          }
-        }, 250);
-      };
-
-      element.addEventListener("mousedown", handleMiddleMouseDown, true);
-      element.addEventListener("auxclick", handleMiddleAuxClick, true);
-
-      runtime.disposables.push({
-        dispose: () => {
-          element.removeEventListener("mousedown", handleMiddleMouseDown, true);
-          element.removeEventListener("auxclick", handleMiddleAuxClick, true);
-        }
-      });
-    }
+      void operation.catch((error) => console.error("[wmcssh][terminal] clipboard operation failed", error));
+    };
+    // Block WebView's native middle-button paste when we own that gesture.
+    const handleMiddleMouseUp = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      middlePasteLockRef.current = Date.now();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const handleNativeMiddlePaste = (event: ClipboardEvent) => {
+      if (Date.now() - middlePasteLockRef.current >= 250) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    element.addEventListener("keydown", handleClipboardShortcut, true);
+    element.addEventListener("mouseup", handleMiddleMouseUp, true);
+    element.addEventListener("paste", handleNativeMiddlePaste, true);
+    runtime.disposables.push({ dispose: () => {
+      element.removeEventListener("keydown", handleClipboardShortcut, true);
+      element.removeEventListener("mouseup", handleMiddleMouseUp, true);
+      element.removeEventListener("paste", handleNativeMiddlePaste, true);
+    } });
 
     const inputDisposable = runtime.terminal.onData((data) => {
       queueTerminalInput(tabId, data);
@@ -199,7 +207,7 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
         const selection = runtime.terminal.getSelection();
         if (!selection) return;
 
-        void writeText(selection).catch((error) => {
+        void (isLinux ? writePrimarySelection(selection) : writeText(selection)).catch((error) => {
           console.error("[wmcssh][terminal] failed to copy selection", error);
         });
       }, 150);
@@ -316,15 +324,7 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
     const observer = new ResizeObserver(() => {
       window.clearTimeout(timeout);
       timeout = window.setTimeout(() => {
-        const runtime = terminalRegistry.get(tabId);
-        if (!runtime?.sessionId) return;
-
-        runtime.fitAddon.fit();
-        void sshResize({
-          sessionId: runtime.sessionId,
-          cols: runtime.terminal.cols,
-          rows: runtime.terminal.rows
-        });
+        terminalRegistry.fitAndResize(tabId);
       }, 80);
     });
 
@@ -337,21 +337,6 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
     };
   }, [active, tabId]);
 
-  useEffect(() => {
-    const runtime = terminalRegistry.get(tabId);
-    if (!runtime) return;
-
-    const fontSet = (document as Document & { fonts?: FontFaceSet }).fonts;
-    if (!fontSet?.ready) return;
-
-    void fontSet.ready.then(() => {
-      const current = terminalRegistry.get(tabId);
-      if (!current?.mounted) return;
-      current.terminal.clearTextureAtlas();
-      current.terminal.refresh(0, Math.max(0, current.terminal.rows - 1));
-      terminalRegistry.fitAndResize(tabId);
-    });
-  }, [tabId]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -443,7 +428,7 @@ export function TerminalView({ tabId, sessionId, active }: TerminalViewProps) {
               try {
                 const text = await readText();
                 if (text) {
-                  queueTerminalInput(tabId, text);
+                  terminalRegistry.get(tabId)?.terminal.paste(text);
                 }
               } finally {
                 focusTerminal();

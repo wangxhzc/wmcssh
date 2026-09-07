@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
+import { closeAppWindow } from "../../../services/tauri/windowApi";
 import { getAppInfo } from "../../../services/tauri/settingsApi";
 import { QuickConnectDialog } from "../../hosts/components/QuickConnectDialog";
 import { parseQuickConnectCommand, type QuickConnectTarget } from "../../hosts/quickConnect";
@@ -20,6 +21,7 @@ export function AppTitleBar({
   onOpenSettings
 }: AppTitleBarProps) {
   const [command, setCommand] = useState("");
+  const [commandFocused, setCommandFocused] = useState(false);
   const [commandError, setCommandError] = useState<string>();
   const [quickConnectTarget, setQuickConnectTarget] = useState<QuickConnectTarget | null>(null);
   const [currentUsername, setCurrentUsername] = useState("");
@@ -65,7 +67,9 @@ export function AppTitleBar({
             setCommand(event.target.value);
             setCommandError(undefined);
           }}
-          placeholder="ssh 10.0.0.1 或 ssh root@10.0.0.1"
+          onFocus={() => setCommandFocused(true)}
+          onBlur={() => setCommandFocused(false)}
+          placeholder={commandFocused ? "172.16.1.1 或 root@172.16.1.1" : ""}
           aria-label="快速连接命令"
           title={commandError}
         />
@@ -107,7 +111,7 @@ export function AppTitleBar({
         <button
           type="button"
           className="titlebar-button titlebar-close-button"
-          onClick={() => void appWindow.close()}
+          onClick={() => void closeAppWindow()}
           title="关闭"
           aria-label="关闭"
         >

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { listenSshClosed, listenSshError, listenSshStatus } from "../../../services/tauri/eventBus";
 import { useTerminalStore } from "../../../stores/terminalStore";
-import { resumeTerminalInput, retryAuthentication, stopTerminalInputBySessionId } from "../actions";
+import { retryAuthentication, stopTerminalInputBySessionId } from "../actions";
 
 function errorMessage(code: string, fallback: string) {
   switch (code) {
@@ -14,7 +14,7 @@ function errorMessage(code: string, fallback: string) {
     case "timeout": return "SSH 连接超时，请检查网络或连接超时设置";
     case "session_not_found": return "SSH 会话状态已失效，请重新连接";
     case "session_closed": return "SSH 会话已经关闭";
-    case "input_buffer_full": return "输入发送过快，已暂时暂停输入";
+    case "input_buffer_full": return "输入缓冲区异常，会话已结束，请重新连接";
     case "secret_store_error": return "系统凭据存储不可用，请检查应用数据权限";
     case "host_not_found": return "主机记录不存在或已被删除";
     case "unsupported": return `当前环境不支持此操作：${fallback}`;
@@ -60,18 +60,6 @@ export function useTerminalEvents() {
       if (!tab) return;
 
       const message = errorMessage(payload.error.code, payload.error.message);
-      if (payload.error.code === "input_buffer_full") {
-        stopTerminalInputBySessionId(payload.sessionId, "input_buffer_full");
-        setTabStatus(tab.tabId, "connected", message, payload.error.code);
-        window.setTimeout(() => {
-          const current = useTerminalStore.getState().findTabBySessionId(payload.sessionId);
-          if (current?.tabId !== tab.tabId || current.errorCode !== "input_buffer_full") return;
-          resumeTerminalInput(tab.tabId);
-          setTabStatus(tab.tabId, "connected");
-        }, 1500);
-        return;
-      }
-
       stopTerminalInputBySessionId(payload.sessionId, "ssh_error_event");
       setTabStatus(tab.tabId, "error", message, payload.error.code, payload.error.details);
       if (payload.error.code === "auth_failed" || payload.error.code === "secret_not_found") {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDialogFocus } from "../../../app/useDialogFocus";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { createHost as createHostApi, updateHost as updateHostApi } from "../../../services/tauri/hostApi";
 import { connectHost } from "../../terminal/actions";
@@ -126,6 +127,7 @@ export function HostFormDialog({ open, onClose, host }: HostFormDialogProps) {
   const [form, setForm] = useState<FormState>(() => initialFormState());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
+  const dialogRef = useDialogFocus(open, onClose, submitting);
 
   useEffect(() => {
     if (open) {
@@ -133,15 +135,6 @@ export function HostFormDialog({ open, onClose, host }: HostFormDialogProps) {
       setError(undefined);
     }
   }, [host, open]);
-
-  useEffect(() => {
-    if (!open || submitting) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, open, submitting]);
 
   if (!open) return null;
 
@@ -161,6 +154,7 @@ export function HostFormDialog({ open, onClose, host }: HostFormDialogProps) {
   };
 
   const submit = async () => {
+    if (submitting) return;
     const validationError = validateForm(form);
     if (validationError) {
       setError(validationError);
@@ -189,10 +183,10 @@ export function HostFormDialog({ open, onClose, host }: HostFormDialogProps) {
 
   return (
     <div className="dialog-overlay" role="presentation" onClick={() => { if (!submitting) onClose(); }}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="host-form-title" onClick={(event) => event.stopPropagation()}>
+      <div ref={dialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby="host-form-title" onClick={(event) => event.stopPropagation()}>
         <div className="dialog-header">
           <div>
-            <div className="dialog-kicker">Host</div>
+            <div className="dialog-kicker">主机配置</div>
             <h3 id="host-form-title">{host ? "编辑主机" : "新建主机"}</h3>
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="关闭" disabled={submitting}>

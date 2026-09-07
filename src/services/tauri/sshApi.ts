@@ -8,10 +8,15 @@ import type {
   SshDisconnectInput,
   SshResizeInput,
   SshWriteInput,
+  SshOutputAckInput,
   TrustHostKeyInput,
   TrustedHostKey
 } from "../../types/ssh";
 import { normalizeAppError } from "../../types/errors";
+
+export async function sshAckOutput(input: SshOutputAckInput): Promise<void> {
+  await invoke("ssh_ack_output", { input });
+}
 
 export async function sshConnect(
   input: SshConnectInput,

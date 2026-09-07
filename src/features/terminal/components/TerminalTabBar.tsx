@@ -1,9 +1,12 @@
+import { TerminalTabTitle } from "./TerminalTabTitle";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHostStore } from "../../../stores/hostStore";
 import { openFileTransferTab } from "../../file-transfer/actions";
 import { connectHost, closeWorkspaceTab } from "../actions";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
+import { sessionStatusLabel } from "../sessionStatusLabel";
+import type { SessionStatus } from "../../../types/ssh";
 
 type TabMenuState = {
   tabId: string;
@@ -32,6 +35,19 @@ export function TerminalTabBar() {
   const tabListPosition = useAnchoredMenuPosition(tabListAnchor, tabListMenuRef);
 
   const closeTabMenu = () => setTabMenu(null);
+
+  useEffect(() => {
+    const closeShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.key.toLowerCase() !== "w") return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const id = useTerminalStore.getState().activeTabId;
+      if (!id) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      void closeWorkspaceTab(id);
+    };
+    window.addEventListener("keydown", closeShortcut, true);
+    return () => window.removeEventListener("keydown", closeShortcut, true);
+  }, []);
 
   useEffect(() => {
     const strip = tabStripRef.current;
@@ -94,8 +110,8 @@ export function TerminalTabBar() {
     });
   };
 
-  const renderStatus = (status: string) => {
-    return <span className={`tab-status-dot ${status}`} aria-label={status} title={status} />;
+  const renderStatus = (status: SessionStatus | "created") => {
+    return <span className={`tab-status-dot ${status}`} aria-label={sessionStatusLabel[status]} title={sessionStatusLabel[status]} />;
   };
 
   const menuTab = tabMenu ? tabs.find((tab) => tab.tabId === tabMenu.tabId) : undefined;
@@ -122,11 +138,10 @@ export function TerminalTabBar() {
     <div className="tab-bar">
       <div ref={tabStripRef} className="tab-strip">
         {tabs.map((tab) => (
-          <button
+          <div
             key={tab.tabId}
             data-tab-id={tab.tabId}
             className={tab.tabId === activeTabId ? "tab-item active" : "tab-item"}
-            onClick={() => activateTab(tab.tabId)}
             onContextMenu={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -137,20 +152,24 @@ export function TerminalTabBar() {
                 y: event.clientY
               });
             }}
-            title={tab.kind === "terminal" ? tab.errorMessage ?? `${tab.title} ${tab.status}` : tab.title}
+            title={tab.kind === "terminal" ? tab.errorMessage ?? `${tab.title} ${sessionStatusLabel[tab.status]}` : tab.title}
           >
-            <span>{tab.title}</span>
-            {tab.kind === "terminal" ? renderStatus(tab.status) : null}
-            <span
+            <button type="button" className="tab-activate" aria-pressed={tab.tabId === activeTabId} onClick={() => activateTab(tab.tabId)}>
+              <TerminalTabTitle title={tab.title} active={tab.tabId === activeTabId} />{tab.kind === "terminal" ? renderStatus(tab.status) : null}
+            </button>
+            <button
+              type="button"
               className="tab-close"
+              aria-label={`关闭 ${tab.title}`}
+              title="关闭标签（Ctrl/Cmd+Shift+W）"
               onClick={(event) => {
                 event.stopPropagation();
                 void closeWorkspaceTab(tab.tabId);
               }}
             >
               ×
-            </span>
-          </button>
+            </button>
+          </div>
         ))}
       </div>
       <button
@@ -184,7 +203,7 @@ export function TerminalTabBar() {
               }}
             >
               <span className="tab-list-title">{tab.title}</span>
-              <span className="tab-list-kind">{tab.kind === "terminal" ? tab.status : "文件"}</span>
+              <span className="tab-list-kind">{tab.kind === "terminal" ? sessionStatusLabel[tab.status] : "文件"}</span>
             </button>
           ))}
         </div>

@@ -11,3 +11,6 @@ pub use recent_commands::*;
 pub use settings_commands::*;
 pub use ssh_commands::*;
 pub use vault_commands::*;
+
+pub mod clipboard_commands;
+pub use clipboard_commands::*;

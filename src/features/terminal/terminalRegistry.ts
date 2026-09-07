@@ -45,12 +45,14 @@ export type TerminalRuntime = {
   dataChannel?: Channel<SshDataEvent>;
   disposables: Array<{ dispose: () => void }>;
   mounted: boolean;
+  lastResize?: { sessionId: string; cols: number; rows: number };
 };
 
 class TerminalRegistry {
   private runtimes = new Map<string, TerminalRuntime>();
   private pendingWrites = new Map<string, Array<Uint8Array | string>>();
   private pendingWriteBytes = new Map<string, number>();
+  private pendingAcks = new Map<string, Array<{ bytes: number; done: () => void }>>();
   private flushTimers = new Map<string, number>();
   private writingTabs = new Set<string>();
   private catchingUpTabs = new Set<string>();
@@ -59,7 +61,6 @@ class TerminalRegistry {
   private windowActive = document.hasFocus() && document.visibilityState === "visible";
   private terminalSettings: TerminalSettingsDto = defaultTerminalSettings;
   private readonly maxBytesPerFlush = 32 * 1024;
-  private readonly maxPendingBytes = 4 * 1024 * 1024;
   private readonly minLetterSpacing = -1;
   private readonly maxLetterSpacing = 1;
 
@@ -73,6 +74,7 @@ class TerminalRegistry {
     this.windowActive = false;
     for (const tabId of this.runtimes.keys()) {
       this.clearFlushTimer(tabId);
+      this.scheduleFlush(tabId);
     }
   };
 
@@ -191,9 +193,13 @@ class TerminalRegistry {
     }
   }
 
-  writeByTabId(tabId: string, data: Uint8Array | string) {
+  writeByTabId(tabId: string, data: Uint8Array | string, onParsed: () => void = () => {}) {
     data = this.preserveScrollback(tabId, data);
-    if (data.length === 0) return;
+    if (data.length === 0) { onParsed(); return; }
+
+    const acknowledgements = this.pendingAcks.get(tabId) ?? [];
+    acknowledgements.push({ bytes: data.length, done: onParsed });
+    this.pendingAcks.set(tabId, acknowledgements);
 
     const pending = this.pendingWrites.get(tabId) ?? [];
     pending.push(data);
@@ -203,15 +209,12 @@ class TerminalRegistry {
     const totalBytes = (this.pendingWriteBytes.get(tabId) ?? 0) + dataBytes;
     this.pendingWriteBytes.set(tabId, totalBytes);
 
-    if (totalBytes > this.maxPendingBytes) {
-      this.dropOldestPendingWrites(tabId, totalBytes - this.maxPendingBytes);
-    }
-
     this.scheduleFlush(tabId);
   }
 
   fit(tabId: string) {
-    this.runtimes.get(tabId)?.fitAddon.fit();
+    const runtime = this.runtimes.get(tabId);
+    if (runtime) this.fitRuntime(runtime);
   }
 
   fitAndResize(tabId: string) {
@@ -234,6 +237,7 @@ class TerminalRegistry {
     this.runtimes.delete(tabId);
     this.pendingWrites.delete(tabId);
     this.pendingWriteBytes.delete(tabId);
+    this.pendingAcks.delete(tabId);
     this.writingTabs.delete(tabId);
     this.catchingUpTabs.delete(tabId);
     this.terminalVisibility.delete(tabId);
@@ -242,15 +246,9 @@ class TerminalRegistry {
   }
 
   private scheduleFlush(tabId: string) {
-    if (!this.windowActive) return;
-    if (this.flushTimers.has(tabId)) return;
-
-    const timer = window.requestAnimationFrame(() => {
-      this.flushTimers.delete(tabId);
-      this.flushPendingWrites(tabId);
-    });
-
-    this.flushTimers.set(tabId, timer);
+    // Parsing must continue when requestAnimationFrame is suspended in the
+    // background. xterm schedules painting separately from its write parser.
+    this.flushPendingWrites(tabId);
   }
 
   private clearFlushTimer(tabId: string) {
@@ -263,7 +261,7 @@ class TerminalRegistry {
 
   private flushPendingWrites(tabId: string) {
     const runtime = this.runtimes.get(tabId);
-    if (!runtime?.mounted) return;
+    if (!runtime) return;
     if (this.writingTabs.has(tabId)) return;
 
     const pending = this.pendingWrites.get(tabId);
@@ -292,13 +290,19 @@ class TerminalRegistry {
 
     this.writingTabs.add(tabId);
     const handleWriteComplete = () => {
+      if (this.runtimes.get(tabId) !== runtime) return;
       this.writingTabs.delete(tabId);
-      const latestRuntime = this.runtimes.get(tabId);
-      if (!latestRuntime?.mounted) {
-        this.pendingWrites.delete(tabId);
-        this.pendingWriteBytes.delete(tabId);
-        this.finishCatchUp(tabId);
-        return;
+      let consumed = writeBytes;
+      const acknowledgements = this.pendingAcks.get(tabId) ?? [];
+      while (consumed > 0 && acknowledgements.length) {
+        const first = acknowledgements[0];
+        const count = Math.min(first.bytes, consumed);
+        first.bytes -= count;
+        consumed -= count;
+        if (first.bytes === 0) {
+          acknowledgements.shift();
+          first.done();
+        }
       }
 
       const remaining = this.pendingWrites.get(tabId);
@@ -412,52 +416,38 @@ class TerminalRegistry {
     return output;
   }
 
-  private dropOldestPendingWrites(tabId: string, bytesToDrop: number) {
-    const pending = this.pendingWrites.get(tabId);
-    if (!pending || pending.length === 0) return;
-
-    let remainingDrop = bytesToDrop;
-    while (remainingDrop > 0 && pending.length > 0) {
-      const oldest = pending[0];
-      const oldestBytes = typeof oldest === "string" ? oldest.length : oldest.byteLength;
-
-      if (oldestBytes <= remainingDrop) {
-        pending.shift();
-        remainingDrop -= oldestBytes;
-        continue;
-      }
-
-      if (typeof oldest === "string") {
-        pending[0] = oldest.slice(remainingDrop);
-      } else {
-        pending[0] = oldest.subarray(remainingDrop);
-      }
-      remainingDrop = 0;
-    }
-
-    const totalBytes = pending.reduce(
-      (sum, item) => sum + (typeof item === "string" ? item.length : item.byteLength),
-      0
-    );
-    this.pendingWriteBytes.set(tabId, totalBytes);
-    console.warn("[wmcssh][terminal] output queue high water mark; dropped oldest output", {
-      tabId,
-      totalBytes
-    });
-  }
-
   private fitAndResizeRuntime(runtime: TerminalRuntime) {
     if (!runtime.mounted) return;
     if (!this.isVisible(runtime)) return;
 
-    runtime.fitAddon.fit();
-    if (runtime.sessionId) {
-      void sshResize({
-        sessionId: runtime.sessionId,
-        cols: runtime.terminal.cols,
-        rows: runtime.terminal.rows
-      });
+    if (!this.fitRuntime(runtime) || !runtime.sessionId) return;
+
+    const size = {
+      sessionId: runtime.sessionId,
+      cols: runtime.terminal.cols,
+      rows: runtime.terminal.rows
+    };
+    const previous = runtime.lastResize;
+    if (previous?.sessionId === size.sessionId && previous.cols === size.cols && previous.rows === size.rows) return;
+
+    runtime.lastResize = size;
+    void sshResize(size).catch((error) => {
+      if (runtime.lastResize === size) runtime.lastResize = undefined;
+      console.error("[wmcssh][terminal] failed to resize", error);
+    });
+  }
+
+  private fitRuntime(runtime: TerminalRuntime) {
+    if (!runtime.mounted || !this.isVisible(runtime)) return false;
+    const size = runtime.fitAddon.proposeDimensions();
+    if (!size || !Number.isFinite(size.cols) || !Number.isFinite(size.rows) || size.cols < 2 || size.rows < 1) return false;
+
+    if (runtime.terminal.cols !== size.cols || runtime.terminal.rows !== size.rows) {
+      // FitAddon.fit clears the renderer before resize. Keep the existing rows
+      // until xterm paints the reflowed buffer on its next render frame instead.
+      runtime.terminal.resize(size.cols, size.rows);
     }
+    return true;
   }
 
   private isVisible(runtime: TerminalRuntime) {

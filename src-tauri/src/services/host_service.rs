@@ -21,6 +21,13 @@ impl HostService {
         }
     }
 
+    pub async fn move_host(
+        &self,
+        input: crate::contracts::MoveHostInput,
+    ) -> Result<(), AppErrorDto> {
+        self.host_repo.move_host(input).await
+    }
+
     pub async fn create_host(&self, input: CreateHostInput) -> Result<HostDto, AppErrorDto> {
         self.validate_host_input(
             &input.name,

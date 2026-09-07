@@ -1,6 +1,7 @@
 use crate::contracts::{HostId, SessionId, SshDataEvent};
 use crate::repositories::recent_session_repository::RecentSessionRepository;
 use crate::ssh::host_key::HostKeyStore;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 
@@ -41,7 +42,10 @@ pub enum SessionCommand {
 pub struct SessionHandle {
     pub session_id: SessionId,
     pub host_id: HostId,
-    pub command_tx: std::sync::mpsc::Sender<SessionCommand>,
+    pub command_tx: std::sync::mpsc::SyncSender<SessionCommand>,
+    pub pending_bytes: Arc<AtomicUsize>,
+    pub pending_output: Arc<AtomicUsize>,
+    pub disconnect_requested: Arc<AtomicBool>,
 }
 
 pub struct SessionWorkerInput {
@@ -51,4 +55,7 @@ pub struct SessionWorkerInput {
     pub on_data: Channel<SshDataEvent>,
     pub recent_repo: Arc<RecentSessionRepository>,
     pub host_key_store: Arc<HostKeyStore>,
+    pub pending_bytes: Arc<AtomicUsize>,
+    pub pending_output: Arc<AtomicUsize>,
+    pub disconnect_requested: Arc<AtomicBool>,
 }

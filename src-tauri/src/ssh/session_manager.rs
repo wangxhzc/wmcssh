@@ -10,12 +10,13 @@ use crate::ssh::types::{SessionCommand, SessionHandle, SessionWorkerInput};
 use crate::utils::base64::decode_base64;
 use crate::utils::ids::new_id;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{ipc::Channel, AppHandle};
 use tokio::sync::RwLock;
 
 pub struct SessionManager {
-    sessions: RwLock<HashMap<SessionId, SessionHandle>>,
+    sessions: Arc<RwLock<HashMap<SessionId, SessionHandle>>>,
     host_service: Arc<HostService>,
     #[allow(dead_code)]
     recent_repo: Arc<RecentSessionRepository>,
@@ -29,7 +30,7 @@ impl SessionManager {
         host_key_store: Arc<HostKeyStore>,
     ) -> Self {
         Self {
-            sessions: RwLock::new(HashMap::new()),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
             host_service,
             recent_repo,
             host_key_store,
@@ -48,11 +49,17 @@ impl SessionManager {
             .build_connect_config_with_credentials(input)
             .await?;
 
-        let (command_tx, command_rx) = std::sync::mpsc::channel::<SessionCommand>();
+        let (command_tx, command_rx) = std::sync::mpsc::sync_channel::<SessionCommand>(256);
+        let pending_bytes = Arc::new(AtomicUsize::new(0));
+        let pending_output = Arc::new(AtomicUsize::new(0));
+        let disconnect_requested = Arc::new(AtomicBool::new(false));
         let handle = SessionHandle {
             session_id: session_id.clone(),
             host_id: config.host_id.clone(),
             command_tx,
+            pending_bytes: pending_bytes.clone(),
+            pending_output: pending_output.clone(),
+            disconnect_requested: disconnect_requested.clone(),
         };
 
         self.sessions
@@ -67,8 +74,15 @@ impl SessionManager {
             on_data,
             recent_repo: self.recent_repo.clone(),
             host_key_store: self.host_key_store.clone(),
+            pending_bytes,
+            pending_output,
+            disconnect_requested,
         };
-        tauri::async_runtime::spawn_blocking(move || run_session_worker(app, worker_input));
+        let sessions = self.sessions.clone();
+        let worker_session_id = session_id.clone();
+        tauri::async_runtime::spawn(supervise_worker(sessions, worker_session_id, move || {
+            run_session_worker(app, worker_input)
+        }));
 
         Ok(SshConnectResult { session_id })
     }
@@ -77,6 +91,16 @@ impl SessionManager {
         let bytes = decode_base64(&input.data_base64)?;
         self.send_command(&input.session_id, SessionCommand::Write(bytes))
             .await
+    }
+
+    pub async fn acknowledge_output(&self, session_id: &str, bytes: usize) {
+        if let Some(handle) = self.sessions.read().await.get(session_id) {
+            let _ = handle.pending_output.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |current| Some(current.saturating_sub(bytes)),
+            );
+        }
     }
 
     pub async fn resize(&self, input: SshResizeInput) -> Result<(), AppErrorDto> {
@@ -91,9 +115,9 @@ impl SessionManager {
     }
 
     pub async fn disconnect(&self, input: SshDisconnectInput) -> Result<(), AppErrorDto> {
-        self.send_command(&input.session_id, SessionCommand::Disconnect)
-            .await?;
-        self.sessions.write().await.remove(&input.session_id);
+        if let Some(handle) = self.sessions.write().await.remove(&input.session_id) {
+            handle.disconnect_requested.store(true, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -107,30 +131,144 @@ impl SessionManager {
             SessionCommand::Resize { .. } => "resize",
             SessionCommand::Disconnect => "disconnect",
         };
-        let command_tx = {
+        let handle = {
             let sessions = self.sessions.read().await;
-            sessions
-                .get(session_id)
-                .map(|handle| handle.command_tx.clone())
+            sessions.get(session_id).cloned()
         };
 
-        let Some(command_tx) = command_tx else {
+        let Some(handle) = handle else {
             return Err(AppErrorDto::session_not_found());
         };
 
-        match command_tx.send(command) {
-            Ok(()) => Ok(()),
-            Err(_) => {
-                self.sessions.write().await.remove(session_id);
-                crate::app_log!(
-                    "[session-manager][{session_id}] command channel closed while sending {command_name}"
-                );
-                Err(AppErrorDto::new(
-                    AppErrorCode::SessionClosed,
-                    "Session command channel is closed",
-                    false,
-                ))
-            }
+        let result = try_enqueue(&handle, command);
+        if matches!(&result, Err(error) if matches!(error.code, AppErrorCode::SessionClosed)) {
+            self.sessions.write().await.remove(session_id);
+            crate::app_log!("[session-manager][{session_id}] command channel closed while sending {command_name}");
+        }
+        result
+    }
+}
+
+async fn supervise_worker(
+    sessions: Arc<RwLock<HashMap<SessionId, SessionHandle>>>,
+    session_id: SessionId,
+    worker: impl FnOnce() + Send + 'static,
+) {
+    // Await even a panicking worker so every exit removes its handle.
+    let _ = tauri::async_runtime::spawn_blocking(worker).await;
+    sessions.write().await.remove(&session_id);
+}
+
+fn try_enqueue(handle: &SessionHandle, command: SessionCommand) -> Result<(), AppErrorDto> {
+    let bytes = match &command {
+        SessionCommand::Write(data) => data.len(),
+        _ => 0,
+    };
+    if handle
+        .pending_bytes
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current
+                .checked_add(bytes)
+                .filter(|total| *total <= 4 * 1024 * 1024)
+        })
+        .is_err()
+    {
+        return Err(input_buffer_full());
+    }
+    match handle.command_tx.try_send(command) {
+        Ok(()) => Ok(()),
+        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+            handle.pending_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            Err(input_buffer_full())
+        }
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+            handle.pending_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            Err(AppErrorDto::new(
+                AppErrorCode::SessionClosed,
+                "Session command channel is closed",
+                false,
+            ))
+        }
+    }
+}
+
+fn input_buffer_full() -> AppErrorDto {
+    AppErrorDto::new(
+        AppErrorCode::InputBufferFull,
+        "SSH input queue is full; retry later",
+        true,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handle(capacity: usize) -> (SessionHandle, std::sync::mpsc::Receiver<SessionCommand>) {
+        let (command_tx, rx) = std::sync::mpsc::sync_channel(capacity);
+        (
+            SessionHandle {
+                session_id: "test".into(),
+                host_id: "host".into(),
+                command_tx,
+                pending_bytes: Arc::new(AtomicUsize::new(0)),
+                pending_output: Arc::new(AtomicUsize::new(0)),
+                disconnect_requested: Arc::new(AtomicBool::new(false)),
+            },
+            rx,
+        )
+    }
+
+    #[test]
+    fn full_command_queue_rejects_without_losing_capacity_or_closing_session() {
+        let (handle, rx) = handle(1);
+        try_enqueue(&handle, SessionCommand::Write(vec![1, 2])).unwrap();
+        assert!(
+            matches!(try_enqueue(&handle, SessionCommand::Write(vec![3])), Err(error) if matches!(error.code, AppErrorCode::InputBufferFull))
+        );
+        assert_eq!(handle.pending_bytes.load(Ordering::Relaxed), 2);
+        assert!(matches!(rx.recv().unwrap(), SessionCommand::Write(data) if data == vec![1, 2]));
+        handle.pending_bytes.fetch_sub(2, Ordering::Relaxed);
+        try_enqueue(&handle, SessionCommand::Write(vec![3])).unwrap();
+        assert!(matches!(rx.recv().unwrap(), SessionCommand::Write(data) if data == vec![3]));
+    }
+
+    #[test]
+    fn byte_limit_includes_data_already_received_by_worker() {
+        let (handle, rx) = handle(2);
+        try_enqueue(&handle, SessionCommand::Write(vec![0; 4 * 1024 * 1024])).unwrap();
+        let _ = rx.recv().unwrap();
+        assert!(
+            matches!(try_enqueue(&handle, SessionCommand::Write(vec![1])), Err(error) if matches!(error.code, AppErrorCode::InputBufferFull))
+        );
+        handle.pending_bytes.fetch_sub(1, Ordering::Relaxed);
+        try_enqueue(&handle, SessionCommand::Write(vec![1])).unwrap();
+        assert_eq!(
+            handle.pending_bytes.load(Ordering::Relaxed),
+            4 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn closed_worker_rolls_back_reservation() {
+        let (handle, rx) = handle(1);
+        drop(rx);
+        assert!(
+            matches!(try_enqueue(&handle, SessionCommand::Write(vec![1])), Err(error) if matches!(error.code, AppErrorCode::SessionClosed))
+        );
+        assert_eq!(handle.pending_bytes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn supervisor_cleans_up_normal_and_panicking_workers() {
+        for panics in [false, true] {
+            let (handle, _rx) = handle(1);
+            let sessions = Arc::new(RwLock::new(HashMap::from([("test".into(), handle)])));
+            supervise_worker(sessions.clone(), "test".into(), move || {
+                assert!(!panics, "simulated worker failure");
+            })
+            .await;
+            assert!(sessions.read().await.is_empty());
         }
     }
 }

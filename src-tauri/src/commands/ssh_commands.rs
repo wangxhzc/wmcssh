@@ -9,6 +9,18 @@ use crate::ssh::client::connect_ssh_transport;
 use tauri::{ipc::Channel, AppHandle, State};
 
 #[tauri::command]
+pub async fn ssh_ack_output(
+    state: State<'_, AppState>,
+    input: crate::contracts::SshOutputAckInput,
+) -> Result<(), AppErrorDto> {
+    state
+        .session_manager
+        .acknowledge_output(&input.session_id, input.bytes as usize)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn ssh_connect(
     app: AppHandle,
     state: State<'_, AppState>,

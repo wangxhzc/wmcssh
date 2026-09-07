@@ -84,6 +84,43 @@ impl HostRepository {
         Self { pool }
     }
 
+    pub async fn move_host(
+        &self,
+        input: crate::contracts::MoveHostInput,
+    ) -> Result<(), AppErrorDto> {
+        let mut tx = self.pool.begin().await?;
+        let mut ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM hosts ORDER BY sort_order ASC, updated_at DESC, id ASC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let source = ids
+            .iter()
+            .position(|id| id == &input.host_id)
+            .ok_or_else(AppErrorDto::host_not_found)?;
+        if !ids.contains(&input.target_host_id) {
+            return Err(AppErrorDto::host_not_found());
+        }
+        if input.host_id == input.target_host_id {
+            return Ok(());
+        }
+        let moved = ids.remove(source);
+        let target = ids
+            .iter()
+            .position(|id| id == &input.target_host_id)
+            .unwrap();
+        ids.insert(target + usize::from(input.after), moved);
+        for (index, id) in ids.iter().enumerate() {
+            sqlx::query("UPDATE hosts SET sort_order = ? WHERE id = ?")
+                .bind(index as i64)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn create_host(&self, input: CreateHostRecord) -> Result<HostRecord, AppErrorDto> {
         let mut tx = self.pool.begin().await?;
         let auth_type = auth_type_to_str(&input.auth_type);
@@ -262,7 +299,7 @@ impl HostRepository {
             builder.push(")");
         }
 
-        builder.push(" ORDER BY hosts.sort_order ASC, hosts.updated_at DESC");
+        builder.push(" ORDER BY hosts.sort_order ASC, hosts.updated_at DESC, hosts.id ASC");
 
         Ok(builder
             .build_query_as::<HostRecord>()
@@ -537,5 +574,88 @@ fn parse_connection_status(value: &str) -> Result<ConnectionStatus, AppErrorDto>
             "Invalid connection status stored in database",
             false,
         )),
+    }
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::*;
+    use crate::contracts::MoveHostInput;
+
+    async fn fixture() -> HostRepository {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::db::migrations::run_migrations(&pool).await.unwrap();
+        for (index, id) in ["a", "b", "c", "d"].iter().enumerate() {
+            sqlx::query("INSERT INTO hosts (id, name, hostname, username, auth_type, sort_order, created_at, updated_at) VALUES (?, ?, 'example', 'root', 'password', ?, 1, 1)")
+                .bind(id).bind(id).bind(index as i64).execute(&pool).await.unwrap();
+        }
+        HostRepository::new(pool)
+    }
+
+    async fn order(repo: &HostRepository) -> Vec<String> {
+        sqlx::query_scalar("SELECT id FROM hosts ORDER BY sort_order, updated_at DESC, id")
+            .fetch_all(&repo.pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn moves_relative_to_target_and_preserves_other_hosts() {
+        let repo = fixture().await;
+        repo.move_host(MoveHostInput {
+            host_id: "d".into(),
+            target_host_id: "b".into(),
+            after: false,
+        })
+        .await
+        .unwrap();
+        assert_eq!(order(&repo).await, ["a", "d", "b", "c"]);
+        // A filtered view can submit just source and target; hidden hosts stay ordered.
+        repo.move_host(MoveHostInput {
+            host_id: "a".into(),
+            target_host_id: "c".into(),
+            after: true,
+        })
+        .await
+        .unwrap();
+        assert_eq!(order(&repo).await, ["d", "b", "c", "a"]);
+        let timestamps: Vec<i64> = sqlx::query_scalar("SELECT updated_at FROM hosts")
+            .fetch_all(&repo.pool)
+            .await
+            .unwrap();
+        assert!(timestamps.iter().all(|value| *value == 1));
+    }
+
+    #[tokio::test]
+    async fn missing_target_and_self_move_do_not_change_order() {
+        let repo = fixture().await;
+        assert!(repo
+            .move_host(MoveHostInput {
+                host_id: "a".into(),
+                target_host_id: "missing".into(),
+                after: false
+            })
+            .await
+            .is_err());
+        assert!(repo
+            .move_host(MoveHostInput {
+                host_id: "missing".into(),
+                target_host_id: "a".into(),
+                after: false
+            })
+            .await
+            .is_err());
+        repo.move_host(MoveHostInput {
+            host_id: "b".into(),
+            target_host_id: "b".into(),
+            after: true,
+        })
+        .await
+        .unwrap();
+        assert_eq!(order(&repo).await, ["a", "b", "c", "d"]);
     }
 }

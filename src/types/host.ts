@@ -105,3 +105,5 @@ export type HostFilter = {
 export type HostListResult = {
   hosts: HostDto[];
 };
+
+export type MoveHostInput = { hostId: HostId; targetHostId: HostId; after: boolean };

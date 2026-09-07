@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useHostStore } from "../../../stores/hostStore";
-import { deleteHost, duplicateHost } from "../../../services/tauri/hostApi";
+import { useHostReorder } from "../useHostReorder";
+import { deleteHost, duplicateHost, moveHost } from "../../../services/tauri/hostApi";
 import { connectHost } from "../../terminal/actions";
 import { openFileTransferTab } from "../../file-transfer/actions";
 import { HostFormDialog } from "./HostFormDialog";
@@ -27,6 +28,7 @@ export function HostSidebar() {
   const [busyHostId, setBusyHostId] = useState<string>();
   const [statusMessage, setStatusMessage] = useState<string>();
   const [hostMenu, setHostMenu] = useState<HostMenuState>(null);
+  const [selectedHostId, setSelectedHostId] = useState<string>();
   const hostMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const statusTimerRef = useRef<number | undefined>(undefined);
@@ -56,6 +58,7 @@ export function HostSidebar() {
 
   useEffect(() => {
     if (!hostMenu) return;
+    hostMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
 
     const handlePointerDown = (event: PointerEvent) => {
       if (hostMenuRef.current?.contains(event.target as Node | null)) return;
@@ -94,6 +97,16 @@ export function HostSidebar() {
       statusTimerRef.current = undefined;
     }, STATUS_MESSAGE_DURATION_MS);
   };
+
+  const reorder = useHostReorder(sidebarRef, async (input) => {
+    try {
+      await moveHost(input);
+      await loadHosts();
+      showStatusMessage("主机顺序已保存");
+    } catch (error) {
+      showStatusMessage(`排序失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
 
   const closeHostMenu = () => setHostMenu(null);
 
@@ -139,7 +152,7 @@ export function HostSidebar() {
 
   return (
     <div className="sidebar-scroll-area">
-      <aside ref={sidebarRef} className="sidebar" onClick={closeHostMenu} onContextMenu={closeHostMenu}>
+      <aside ref={sidebarRef} className={`sidebar${reorder.draggedId ? " host-reordering" : ""}`} aria-busy={reorder.saving} onClick={closeHostMenu} onContextMenu={closeHostMenu}>
       <div className="sidebar-heading">
         <span>主机</span>
         <span className="sidebar-count">{hosts.length}</span>
@@ -154,6 +167,7 @@ export function HostSidebar() {
               if (event.key === "Enter") void loadHosts();
             }}
             placeholder="搜索主机"
+            aria-label="搜索主机"
           />
           <button
             className="sidebar-add-button"
@@ -170,21 +184,17 @@ export function HostSidebar() {
 
       {loading ? <p>加载中...</p> : null}
 
-      {!loading && hosts.length === 0 ? <p className="empty-state">还没有主机，先新建一个。</p> : null}
+      {!loading && hosts.length === 0 ? <p className="empty-state">{keyword.trim() ? "没有匹配的主机，请调整搜索条件。" : "还没有主机，点击 + 新建一个。"}</p> : null}
 
       {hosts.map((host) => (
         <div
           key={host.id}
-          className="host-card"
-          role="button"
-          tabIndex={0}
-          onClick={() => void connectHost(host)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              void connectHost(host);
-            }
-          }}
+          data-host-id={host.id}
+          className={`host-card${selectedHostId === host.id ? " selected" : ""}${reorder.draggedId === host.id ? " dragging" : ""}${reorder.destination?.targetHostId === host.id ? (reorder.destination.after ? " drop-after" : " drop-before") : ""}`}
+          onPointerDown={(event) => { if (!loading && !hostMenu) reorder.start(event, host.id); }}
+          onDragStart={(event) => event.preventDefault()}
+          onClick={() => { if (!reorder.suppressClick()) setSelectedHostId(host.id); }}
+          onDoubleClick={() => { if (!reorder.suppressClick()) void connectHost(host); }}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -195,12 +205,12 @@ export function HostSidebar() {
             });
           }}
         >
-          <div className="host-card-main">
+          <button className="host-card-main host-select" aria-pressed={selectedHostId === host.id} title={`${host.name} · ${host.username}@${host.hostname}:${host.port}`}>
             <div className="host-name">{host.name}</div>
             <div className="host-meta">
               {host.username}@{host.hostname}:{host.port}
             </div>
-          </div>
+          </button>
 
         </div>
       ))}

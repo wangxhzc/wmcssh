@@ -54,6 +54,13 @@ pub struct SshDisconnectInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SshOutputAckInput {
+    pub session_id: SessionId,
+    pub bytes: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrustHostKeyInput {
     pub host_id: HostId,
     pub expected_fingerprint: String,
@@ -101,7 +108,9 @@ pub struct DeleteTrustedHostKeyResult {
 #[serde(rename_all = "camelCase", tag = "event", content = "data")]
 pub enum SshDataEvent {
     Data {
+        #[serde(rename = "sessionId")]
         session_id: SessionId,
+        #[serde(rename = "dataBase64")]
         data_base64: String,
     },
 }
@@ -144,4 +153,27 @@ pub struct SshErrorPayload {
     pub host_id: Option<HostId>,
     pub error: AppErrorDto,
     pub at: EpochMillis,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_data_event_matches_frontend_channel_contract() {
+        let event = SshDataEvent::Data {
+            session_id: "session-test".into(),
+            data_base64: "cm9vdEAkIA==".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "event": "data",
+                "data": {
+                    "sessionId": "session-test",
+                    "dataBase64": "cm9vdEAkIA=="
+                }
+            })
+        );
+    }
 }

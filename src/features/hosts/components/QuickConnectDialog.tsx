@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDialogFocus } from "../../../app/useDialogFocus";
 import { useHostStore } from "../../../stores/hostStore";
 import { listHosts, updateHost } from "../../../services/tauri/hostApi";
 import { connectHost } from "../../terminal/actions";
@@ -22,6 +23,7 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
   const [rememberPassword, setRememberPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
+  const dialogRef = useDialogFocus(!!target, onClose, submitting);
 
   useEffect(() => {
     if (!target) return;
@@ -33,18 +35,10 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
     setError(undefined);
   }, [currentUsername, target]);
 
-  useEffect(() => {
-    if (!target || submitting) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, submitting, target]);
-
   if (!target) return null;
 
   const submit = async () => {
+    if (submitting) return;
     const normalizedUsername = username.trim();
     if (!normalizedUsername) {
       setError("请输入用户名");
@@ -100,6 +94,7 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
     <div className="dialog-overlay" role="presentation" onClick={() => { if (!submitting) onClose(); }}>
       <div
         className="dialog quick-connect-dialog"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="quick-connect-title"
@@ -107,7 +102,7 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
       >
         <div className="dialog-header">
           <div>
-            <div className="dialog-kicker">Quick connect</div>
+            <div className="dialog-kicker">快速连接</div>
             <h3 id="quick-connect-title">连接到 {target.hostname}</h3>
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="关闭" disabled={submitting}>
@@ -122,7 +117,6 @@ export function QuickConnectDialog({ target, currentUsername, onClose }: QuickCo
           <label className="field">
             <span>用户名</span>
             <input
-              autoFocus
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               placeholder="用户名"

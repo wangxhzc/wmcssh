@@ -33,6 +33,7 @@ const TRANSFER_BUFFER_SIZE: usize = 256 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct FileTransferService {
+    scheduler: super::transfer_scheduler::TransferScheduler,
     host_service: Arc<HostService>,
     sessions: Mutex<HashMap<String, Arc<Mutex<FileTransferSession>>>>,
     tasks: Mutex<HashMap<String, Arc<TransferTaskControl>>>,
@@ -185,13 +186,17 @@ impl ProgressReporter {
 }
 
 impl FileTransferService {
-    pub fn new(host_service: Arc<HostService>, host_key_store: Arc<HostKeyStore>) -> Self {
-        Self {
+    pub fn new(
+        host_service: Arc<HostService>,
+        host_key_store: Arc<HostKeyStore>,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            scheduler: super::transfer_scheduler::TransferScheduler::new(4)?,
             host_service,
             sessions: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             host_key_store,
-        }
+        })
     }
 
     pub async fn open_file_transfer_session(
@@ -255,9 +260,14 @@ impl FileTransferService {
         input: ListRemoteDirectoryInput,
     ) -> Result<ListRemoteDirectoryResult, AppErrorDto> {
         let transfer_session = self.get_session(&input.transfer_session_id)?;
-        let transfer_session = transfer_session
-            .lock()
-            .map_err(|_| file_transfer_sessions_lock_error())?;
+        let transfer_session = transfer_session.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => AppErrorDto::new(
+                AppErrorCode::IoError,
+                "当前会话正在传输文件，请稍后刷新目录",
+                true,
+            ),
+            std::sync::TryLockError::Poisoned(_) => file_transfer_sessions_lock_error(),
+        })?;
         let sftp = &transfer_session.sftp;
         let (path, fallback_to_root) = resolve_remote_directory_path(sftp, input.path.as_deref());
         let entries = sftp.readdir(Path::new(&path)).map_err(|error| {
@@ -453,51 +463,52 @@ impl FileTransferService {
             task: task.clone(),
             channel,
         };
-        let thread_name = format!("sftp-transfer-{}", task.snapshot()?.transfer_id);
+        let session_id = task.snapshot()?.transfer_session_id;
         let worker_task = task.clone();
-        std::thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                if worker_task.cancelled.load(Ordering::Relaxed) {
+        let submitted = self.scheduler.submit(session_id, move || {
+            if worker_task.cancelled.load(Ordering::Relaxed) {
+                let _ = reporter.emit_snapshot();
+                return;
+            }
+            let session = match session.lock() {
+                Ok(session) => session,
+                Err(_) => {
+                    let _ = worker_task.finish(Err(file_transfer_sessions_lock_error()));
                     let _ = reporter.emit_snapshot();
                     return;
                 }
-                let session = match session.lock() {
-                    Ok(session) => session,
-                    Err(_) => {
-                        let _ = worker_task.finish(Err(file_transfer_sessions_lock_error()));
-                        let _ = reporter.emit_snapshot();
-                        return;
-                    }
-                };
-                match worker_task.mark_running() {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        let _ = reporter.emit_snapshot();
-                        return;
-                    }
-                    Err(error) => {
-                        let _ = worker_task.finish(Err(error));
-                        let _ = reporter.emit_snapshot();
-                        return;
-                    }
+            };
+            match worker_task.mark_running() {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = reporter.emit_snapshot();
+                    return;
                 }
-                let _ = reporter.emit_snapshot();
-                let result = operation(&session, &worker_task.cancelled, &reporter);
-                let _ = worker_task.finish(result);
-                let _ = reporter.emit_snapshot();
-            })
-            .map(|_| ())
-            .map_err(|error| {
-                let app_error = AppErrorDto::with_details(
+                Err(error) => {
+                    let _ = worker_task.finish(Err(error));
+                    let _ = reporter.emit_snapshot();
+                    return;
+                }
+            }
+            let _ = reporter.emit_snapshot();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                operation(&session, &worker_task.cancelled, &reporter)
+            }))
+            .unwrap_or_else(|_| {
+                Err(AppErrorDto::new(
                     AppErrorCode::Unknown,
-                    "Failed to start file transfer worker",
-                    error.to_string(),
-                    true,
-                );
-                let _ = task.finish(Err(app_error.clone()));
-                app_error
-            })
+                    "File transfer worker panicked",
+                    false,
+                ))
+            });
+            let _ = worker_task.finish(result);
+            let _ = reporter.emit_snapshot();
+        });
+        submitted.map_err(|error| {
+            let error = AppErrorDto::io(error);
+            let _ = task.finish(Err(error.clone()));
+            error
+        })
     }
 
     fn get_session(

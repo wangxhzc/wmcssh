@@ -6,6 +6,7 @@ import {
   resetTerminalSettings as resetTerminalSettingsApi,
   updateTerminalSettings as updateTerminalSettingsApi
 } from "../services/tauri/settingsApi";
+import { loadTerminalFonts } from "../features/terminal/terminalFonts";
 import { terminalRegistry } from "../features/terminal/terminalRegistry";
 
 type SettingsStore = {
@@ -26,6 +27,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     set({ loading: true });
     try {
       const settings = await getTerminalSettings();
+      await loadTerminalFonts(settings);
       set({ terminalSettings: settings, loaded: true });
       terminalRegistry.applySettings(settings);
     } finally {
@@ -37,6 +39,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     set({ loading: true });
     try {
       const settings = await updateTerminalSettingsApi(input);
+      await loadTerminalFonts(settings);
       set({ terminalSettings: settings, loaded: true });
       terminalRegistry.applySettings(settings);
       return settings;
@@ -49,6 +52,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     set({ loading: true });
     try {
       const settings = await resetTerminalSettingsApi();
+      await loadTerminalFonts(settings);
       set({ terminalSettings: settings, loaded: true });
       terminalRegistry.applySettings(settings);
       return settings;

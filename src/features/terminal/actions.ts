@@ -4,7 +4,7 @@ import type { SshDataEvent } from "../../types/ssh";
 import { normalizeAppError } from "../../types/errors";
 import { closeFileTransferSession } from "../../services/tauri/fileTransferApi";
 import { sshConnect, sshDisconnect } from "../../services/tauri/sshApi";
-import { sshWrite } from "../../services/tauri/sshApi";
+import { sshWrite, sshAckOutput } from "../../services/tauri/sshApi";
 import { base64ToUint8Array } from "../../services/terminal/terminalCodec";
 import { stringToBase64 } from "../../services/terminal/terminalCodec";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -103,25 +103,18 @@ export async function flushTerminalInput(tabId: string) {
       dataBase64: stringToBase64(chunk)
     });
   } catch (error: unknown) {
-    console.error("[wmcssh][terminal] failed to flush input", error);
-    stopTerminalInput(tabId, "ssh_write_failed");
-
     const appError = normalizeAppError(error);
     if (appError.code === "input_buffer_full") {
-      useTerminalStore.getState().setTabStatus(
-        tabId,
-        "connected",
-        "输入发送过快，已暂时暂停输入",
-        appError.code
-      );
-      window.setTimeout(() => {
-        const current = useTerminalStore.getState().tabs.find((item) => item.tabId === tabId);
-        if (current?.kind !== "terminal" || current.errorCode !== "input_buffer_full") return;
-        resumeTerminalInput(tabId);
-        useTerminalStore.getState().setTabStatus(tabId, "connected");
-      }, 1500);
+      // Rejected writes were never accepted by Rust. Keep their order and retry
+      // only while this exact connection is still active.
+      if (!isTerminalInputStopped(tabId) && terminalRegistry.getSessionId(tabId) === sessionId) {
+        pendingInputByTab.set(tabId, chunk + (pendingInputByTab.get(tabId) ?? ""));
+        inputFlushTimers.set(tabId, window.setTimeout(() => void flushTerminalInput(tabId), 100));
+      }
       return;
     }
+    console.error("[wmcssh][terminal] failed to flush input", error);
+    stopTerminalInput(tabId, "ssh_write_failed");
     if (appError.code === "session_closed" || appError.code === "session_not_found") {
       console.warn("[wmcssh][terminal] stop input after closed session", {
         tabId,
@@ -222,6 +215,24 @@ function connectInput(hostId: string, credentials: ConnectionCredentials) {
   };
 }
 
+function createTerminalDataChannel(tabId: string) {
+  if (!terminalRegistry.get(tabId)) terminalRegistry.create(tabId);
+  const channel = new Channel<SshDataEvent>();
+  terminalRegistry.bindDataChannel(tabId, channel);
+  channel.onmessage = (payload) => {
+    const runtime = terminalRegistry.get(tabId);
+    if (!runtime || runtime.dataChannel !== channel) return;
+    const { sessionId, dataBase64 } = payload.data;
+    const bytes = base64ToUint8Array(dataBase64);
+    terminalRegistry.writeByTabId(tabId, bytes, () => {
+      void sshAckOutput({ sessionId, bytes: bytes.byteLength }).catch((error) => {
+        console.error("[wmcssh][terminal] output acknowledgement failed", error);
+      });
+    });
+  };
+  return channel;
+}
+
 export async function connectHost(host: HostDto, suppliedCredentials?: ConnectionCredentials) {
   const credentials = suppliedCredentials ?? await requestConnectionCredentials(host);
   if (!credentials) return;
@@ -236,24 +247,18 @@ export async function connectHost(host: HostDto, suppliedCredentials?: Connectio
   store.setTabStatus(tabId, "connecting");
   resumeTerminalInput(tabId);
 
-  const onData = new Channel<SshDataEvent>();
-  terminalRegistry.bindDataChannel(tabId, onData);
-  onData.onmessage = (payload) => {
-    const dataBase64 =
-      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.dataBase64 ??
-      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.data_base64 ??
-      (payload as { dataBase64?: string; data_base64?: string }).dataBase64 ??
-      (payload as { dataBase64?: string; data_base64?: string }).data_base64;
-
-    if (!dataBase64) return;
-    terminalRegistry.writeByTabId(tabId, base64ToUint8Array(dataBase64));
-  };
+  const onData = createTerminalDataChannel(tabId);
 
   try {
     const { sessionId } = await sshConnect(
       connectInput(host.id, credentials),
       onData
     );
+
+    if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
+      await sshDisconnect({ sessionId });
+      return;
+    }
 
     store.bindSession(tabId, sessionId);
     sessionTabIndex.bind(sessionId, tabId);
@@ -287,19 +292,14 @@ export async function retryAuthentication(tabId: string, message: string) {
   }
   store.setTabStatus(tabId, "reconnecting");
   resumeTerminalInput(tabId);
-  const onData = new Channel<SshDataEvent>();
-  terminalRegistry.bindDataChannel(tabId, onData);
-  onData.onmessage = (payload) => {
-    const dataBase64 =
-      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.dataBase64 ??
-      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.data_base64 ??
-      (payload as { dataBase64?: string; data_base64?: string }).dataBase64 ??
-      (payload as { dataBase64?: string; data_base64?: string }).data_base64;
-    if (dataBase64) terminalRegistry.writeByTabId(tabId, base64ToUint8Array(dataBase64));
-  };
+  const onData = createTerminalDataChannel(tabId);
 
   try {
     const { sessionId } = await sshConnect(connectInput(host.id, credentials), onData);
+    if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
+      await sshDisconnect({ sessionId });
+      return;
+    }
     store.replaceSession(tabId, sessionId);
     sessionTabIndex.bind(sessionId, tabId);
     terminalRegistry.bindSession(tabId, sessionId);
@@ -351,24 +351,18 @@ export async function reconnectTab(tabId: string) {
     sessionTabIndex.unbind(oldSessionId);
   }
 
-  const onData = new Channel<SshDataEvent>();
-  terminalRegistry.bindDataChannel(tabId, onData);
-  onData.onmessage = (payload) => {
-    const dataBase64 =
-      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.dataBase64 ??
-      (payload as { data?: { dataBase64?: string; data_base64?: string } }).data?.data_base64 ??
-      (payload as { dataBase64?: string; data_base64?: string }).dataBase64 ??
-      (payload as { dataBase64?: string; data_base64?: string }).data_base64;
-
-    if (!dataBase64) return;
-    terminalRegistry.writeByTabId(tabId, base64ToUint8Array(dataBase64));
-  };
+  const onData = createTerminalDataChannel(tabId);
 
   try {
     const { sessionId: newSessionId } = await sshConnect(
       { hostId: tab.hostId, initialCols: DEFAULT_TERMINAL_COLS, initialRows: DEFAULT_TERMINAL_ROWS },
       onData
     );
+
+    if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
+      await sshDisconnect({ sessionId: newSessionId });
+      return;
+    }
 
     store.replaceSession(tabId, newSessionId);
     sessionTabIndex.replace(oldSessionId, newSessionId, tabId);

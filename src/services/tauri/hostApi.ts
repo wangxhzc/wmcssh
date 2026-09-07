@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CreateHostInput,
+  MoveHostInput,
   DuplicateHostInput,
   HostDto,
   HostFilter,
@@ -52,6 +53,14 @@ export async function duplicateHost(input: DuplicateHostInput): Promise<HostDto>
 export async function deleteHost(hostId: string): Promise<void> {
   try {
     await invoke("delete_host", { hostId });
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
+export async function moveHost(input: MoveHostInput): Promise<void> {
+  try {
+    await invoke("move_host", { input });
   } catch (error) {
     throw normalizeAppError(error);
   }

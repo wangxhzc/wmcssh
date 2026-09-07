@@ -9,6 +9,7 @@ use crate::utils::{base64::encode_base64, time::now_millis};
 use ssh2::ErrorCode;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,6 +22,7 @@ const READ_ERROR_KEEPALIVE_INTERVAL: usize = 200;
 const COMMAND_BUDGET_MS: u64 = 2;
 const SSH_WRITE_CHUNK_SIZE: usize = 256;
 const MAX_PENDING_INPUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PENDING_OUTPUT_BYTES: usize = 1024 * 1024;
 
 enum WriteStep {
     Complete,
@@ -167,8 +169,38 @@ fn run_session_worker_inner(
     let mut transient_read_errors = 0usize;
     let mut pending_input = VecDeque::<Vec<u8>>::new();
     let mut pending_input_bytes = 0usize;
+    let mut next_keepalive = Instant::now();
 
     loop {
+        if input.disconnect_requested.load(Ordering::Relaxed) {
+            handle_command(
+                app,
+                input,
+                &mut channel,
+                SessionCommand::Disconnect,
+                &mut pending_input,
+                &mut pending_input_bytes,
+            )?;
+            return Ok(());
+        }
+        if input.config.keepalive_interval_secs > 0 && Instant::now() >= next_keepalive {
+            match session.keepalive_send() {
+                Ok(seconds) => {
+                    next_keepalive = Instant::now() + Duration::from_secs(u64::from(seconds).max(1))
+                }
+                Err(error) if is_retryable_ssh_error(&error) => {
+                    next_keepalive = Instant::now() + Duration::from_millis(100);
+                }
+                Err(error) => {
+                    return Err(AppErrorDto::with_details(
+                        AppErrorCode::IoError,
+                        "SSH keepalive failed",
+                        error.to_string(),
+                        true,
+                    ))
+                }
+            }
+        }
         let mut handled_command = false;
         let command_round_started_at = Instant::now();
         for _ in 0..MAX_COMMANDS_PER_LOOP {
@@ -205,6 +237,20 @@ fn run_session_worker_inner(
             )?;
         }
 
+        if input.pending_output.load(Ordering::Relaxed) >= MAX_PENDING_OUTPUT_BYTES {
+            if wait_for_command(
+                app,
+                input,
+                &mut channel,
+                idle_wait,
+                &mut command_rx_closed,
+                &mut pending_input,
+                &mut pending_input_bytes,
+            )? {
+                return Ok(());
+            }
+            continue;
+        }
         match channel.read(&mut buf) {
             Ok(0) => {
                 update_recent_session(
@@ -234,11 +280,7 @@ fn run_session_worker_inner(
             }
             Ok(n) => {
                 transient_read_errors = 0;
-                let data_base64 = encode_base64(&buf[..n]);
-                let _ = input.on_data.send(SshDataEvent::Data {
-                    session_id: input.session_id.clone(),
-                    data_base64,
-                });
+                send_output(input, &buf[..n])?;
             }
             Err(err) if is_transport_read_error(&err) => {
                 transient_read_errors += 1;
@@ -456,16 +498,15 @@ fn drain_channel_output(
     input: &SessionWorkerInput,
     channel: &mut ssh2::Channel,
 ) -> Result<bool, AppErrorDto> {
+    if input.pending_output.load(Ordering::Relaxed) >= MAX_PENDING_OUTPUT_BYTES {
+        return Ok(false);
+    }
     let mut buf = [0u8; 32768];
 
     match channel.read(&mut buf) {
         Ok(0) => Ok(false),
         Ok(n) => {
-            let data_base64 = encode_base64(&buf[..n]);
-            let _ = input.on_data.send(SshDataEvent::Data {
-                session_id: input.session_id.clone(),
-                data_base64,
-            });
+            send_output(input, &buf[..n])?;
             Ok(true)
         }
         Err(err) if is_retryable_io_error(&err) || is_transport_read_error(&err) => Ok(false),
@@ -476,6 +517,26 @@ fn drain_channel_output(
             true,
         )),
     }
+}
+
+fn send_output(input: &SessionWorkerInput, bytes: &[u8]) -> Result<(), AppErrorDto> {
+    input
+        .pending_output
+        .fetch_add(bytes.len(), Ordering::Relaxed);
+    input
+        .on_data
+        .send(SshDataEvent::Data {
+            session_id: input.session_id.clone(),
+            data_base64: encode_base64(bytes),
+        })
+        .map_err(|error| {
+            AppErrorDto::with_details(
+                AppErrorCode::SessionClosed,
+                "Terminal output receiver closed",
+                error.to_string(),
+                false,
+            )
+        })
 }
 
 fn enqueue_pending_input(
@@ -517,10 +578,16 @@ fn process_pending_input_step(
     let step = write_channel_step(channel, &current);
     match step {
         WriteStep::Complete => {
+            input
+                .pending_bytes
+                .fetch_sub(current.len(), Ordering::Relaxed);
             *pending_input_bytes = pending_input_bytes.saturating_sub(current.len());
         }
         WriteStep::Pending(remaining) => {
             if remaining.len() < current.len() {
+                input
+                    .pending_bytes
+                    .fetch_sub(current.len() - remaining.len(), Ordering::Relaxed);
                 *pending_input_bytes =
                     pending_input_bytes.saturating_sub(current.len() - remaining.len());
             }

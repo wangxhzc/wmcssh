@@ -25,6 +25,8 @@ import { getHost } from "../../../services/tauri/hostApi";
 import { requestConnectionCredentials } from "../../hosts/connectionCredentials";
 import { rememberConnectionCredentials } from "../../terminal/actions";
 import { TransferQueue } from "./TransferQueue";
+import { formatTransferBytes } from "../transferQueue";
+import type { ListRemoteDirectoryResult } from "../../../types/fileTransfer";
 
 type FileTransferViewProps = {
   tabId: string;
@@ -102,6 +104,9 @@ async function collectLocalDirectoryPayload(rootPath: string) {
 export function FileTransferView({ tabId, hostId, transferSessionId, active }: FileTransferViewProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<FileTransferLoadState>({ status: "idle" });
+  const [directory, setDirectory] = useState<ListRemoteDirectoryResult>();
+  const requestedPath = useRef<string | undefined>(undefined);
+  const loadVersion = useRef(0);
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [queueVisible, setQueueVisible] = useState(false);
@@ -126,6 +131,8 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
 
   const loadDirectory = useCallback(
     async (path?: string) => {
+      const version = ++loadVersion.current;
+      requestedPath.current = path;
       setState({ status: "loading" });
       try {
         let activeTransferSessionId = transferSessionId;
@@ -161,6 +168,9 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         }
 
         const result = await listRemoteDirectory({ transferSessionId: activeTransferSessionId, path });
+        if (version !== loadVersion.current) return;
+        requestedPath.current = result.path;
+        setDirectory(result);
         setState({
           status: "ready",
           path: result.path,
@@ -168,6 +178,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           fallbackToRoot: result.fallbackToRoot
         });
       } catch (error) {
+        if (version !== loadVersion.current) return;
         setState({ status: "error", error: error as AppErrorDto });
       }
     },
@@ -405,7 +416,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const handleTrustHostKey = async (error: AppErrorDto) => {
     try {
       const trusted = await confirmAndTrustHostKey(hostId, error);
-      if (trusted) await loadDirectory();
+      if (trusted) await loadDirectory(requestedPath.current);
     } catch (cause) {
       setState({ status: "error", error: normalizeAppError(cause) });
     }
@@ -415,14 +426,9 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     const isDirectory = entry.entryType === "directory";
 
     return (
-      <button
+      <div
         key={entry.path}
-        type="button"
         className="file-transfer-entry"
-        onClick={() => {
-          if (!isDirectory) return;
-          void loadDirectory(entry.path);
-        }}
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -434,11 +440,13 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         }}
       >
         <span className={`file-transfer-entry-icon ${entry.entryType}`}>{isDirectory ? "DIR" : "FILE"}</span>
-        <span className="file-transfer-entry-name">{entry.name}</span>
+        {isDirectory ? <button className="file-entry-open" disabled={state.status === "loading"} onClick={() => void loadDirectory(entry.path)} title={`打开目录 ${entry.name}`}>{entry.name}</button>
+          : <span className="file-transfer-entry-name" title={entry.name}>{entry.name}</span>}
         <span className="file-transfer-entry-meta">
-          {entry.entryType === "directory" ? "目录" : entry.size ? `${entry.size} B` : "文件"}
+          {isDirectory ? "目录" : entry.size !== undefined ? formatTransferBytes(entry.size) : "大小未知"}
         </span>
-      </button>
+        <button className="ghost-button" disabled={busy || state.status === "loading"} aria-label={`下载 ${entry.name}`} onClick={() => void handleDownload(entry)}>下载</button>
+      </div>
     );
   };
 
@@ -461,7 +469,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           className="ghost-button"
           disabled={busy || state.status === "loading"}
           onClick={() => {
-            void loadDirectory(state.status === "ready" ? state.path : undefined);
+            void loadDirectory(requestedPath.current);
           }}
         >
           刷新
@@ -487,7 +495,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           传输队列
         </button>
         <div className="file-transfer-path">
-          {state.status === "ready" ? state.path : "正在连接远程目录..."}
+          {directory?.path ?? requestedPath.current ?? (state.status === "error" ? "尚未载入目录" : "正在连接远程目录...")}
         </div>
       </div>
 
@@ -499,7 +507,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
 
       {notice ? <div className="file-transfer-note">{notice}</div> : null}
 
-      {state.status === "loading" ? <div className="file-transfer-message">正在加载远程目录...</div> : null}
+      {state.status === "loading" ? <div className="file-transfer-note" role="status">{directory ? "正在刷新目录..." : "正在加载远程目录..."}</div> : null}
 
       {state.status === "error" ? (
         <div className="file-transfer-message file-transfer-error">
@@ -510,21 +518,21 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
             </button>
           ) : null}
           {state.error.code !== "host_key_unknown" && state.error.code !== "host_key_mismatch" ? (
-            <button type="button" className="ghost-button" onClick={() => void loadDirectory()}>
+            <button type="button" className="ghost-button" onClick={() => void loadDirectory(requestedPath.current)}>
               重试
             </button>
           ) : null}
         </div>
       ) : null}
 
-      {state.status === "ready" ? (
+      {directory ? (
         <>
-          {state.fallbackToRoot ? (
+          {directory.fallbackToRoot ? (
             <div className="file-transfer-note">未获取到用户家目录，已自动回退到根目录 `/`。</div>
           ) : null}
           <div className="file-transfer-list-scroll-area">
             <div ref={listRef} className="file-transfer-list">
-              {state.entries.length > 0 ? state.entries.map(renderRow) : (
+              {directory.entries.length > 0 ? directory.entries.map(renderRow) : (
                 <div className="file-transfer-message">当前目录为空。</div>
               )}
             </div>

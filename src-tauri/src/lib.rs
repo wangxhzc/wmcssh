@@ -23,12 +23,17 @@ use services::host_service::HostService;
 use services::settings_service::SettingsService;
 use ssh::host_key::HostKeyStore;
 use ssh::session_manager::SessionManager;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Manager, PhysicalSize, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+#[derive(Default)]
+struct CloseConfirmation(AtomicBool);
 
 const WINDOW_STATE_FILE: &str = "window-state.json";
-const MIN_WINDOW_WIDTH: f64 = 1280.0;
-const MIN_WINDOW_HEIGHT: f64 = 720.0;
+const MIN_WINDOW_WIDTH: f64 = 640.0;
+const MIN_WINDOW_HEIGHT: f64 = 480.0;
 
 #[derive(Deserialize, Serialize)]
 struct WindowSizeState {
@@ -40,22 +45,29 @@ fn restore_window_size(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let Ok(app_dir) = app.path().app_data_dir() else {
-        return;
-    };
-    let Ok(contents) = std::fs::read_to_string(app_dir.join(WINDOW_STATE_FILE)) else {
-        return;
-    };
-    let Ok(size) = serde_json::from_str::<WindowSizeState>(&contents) else {
-        return;
-    };
-
-    if size.width.is_finite() && size.height.is_finite() {
-        let _ = window.set_size(tauri::LogicalSize::new(
-            size.width.max(MIN_WINDOW_WIDTH),
-            size.height.max(MIN_WINDOW_HEIGHT),
-        ));
+    let saved = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join(WINDOW_STATE_FILE)).ok())
+        .and_then(|text| serde_json::from_str::<WindowSizeState>(&text).ok())
+        .filter(|size| size.width.is_finite() && size.height.is_finite());
+    let mut size = saved.unwrap_or(WindowSizeState {
+        width: 1360.0,
+        height: 780.0,
+    });
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let area = monitor
+            .work_area()
+            .size
+            .to_logical::<f64>(monitor.scale_factor());
+        size.width = size.width.min(area.width);
+        size.height = size.height.min(area.height);
     }
+    let _ = window.set_size(tauri::LogicalSize::new(
+        size.width.max(MIN_WINDOW_WIDTH),
+        size.height.max(MIN_WINDOW_HEIGHT),
+    ));
 }
 
 fn save_window_size(window: &tauri::Window, size: &PhysicalSize<u32>) {
@@ -87,6 +99,7 @@ mod tests;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(CloseConfirmation::default())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -122,7 +135,7 @@ pub fn run() {
                 let file_transfer_service = Arc::new(FileTransferService::new(
                     host_service.clone(),
                     host_key_store.clone(),
-                ));
+                )?);
                 let session_manager = Arc::new(SessionManager::new(
                     host_service.clone(),
                     recent_repo.clone(),
@@ -153,9 +166,37 @@ pub fn run() {
             if let WindowEvent::Resized(size) = event {
                 save_window_size(window, size);
             }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let active = state.file_transfer_service.list_transfer_tasks().map(|tasks| {
+                    tasks.iter().filter(|task| matches!(task.status,
+                        contracts::TransferStatus::Queued | contracts::TransferStatus::Running)).count()
+                });
+                if matches!(active, Ok(0)) { return; }
+                api.prevent_close();
+                if window.state::<CloseConfirmation>().0.swap(true, Ordering::Relaxed) { return; }
+                let message = match active {
+                    Ok(count) => format!("还有 {count} 个文件传输任务未完成。退出会中断传输，重新启动后不会恢复。确定退出吗？"),
+                    Err(_) => "无法确认文件传输状态，退出可能中断未完成的任务。确定退出吗？".to_string(),
+                };
+                let closing_window = window.clone();
+                window.dialog().message(message).title("退出 wmcssh")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom("退出并中断传输".into(), "继续传输".into()))
+                    .show(move |confirmed| {
+                        if confirmed {
+                            // destroy bypasses CloseRequested after explicit confirmation.
+                            let _ = closing_window.destroy();
+                        }
+                        closing_window.state::<CloseConfirmation>().0.store(false, Ordering::Relaxed);
+                    });
+            }
         })
         .invoke_handler(tauri::generate_handler![
+            read_primary_selection,
+            write_primary_selection,
             create_host,
+            move_host,
             duplicate_host,
             update_host,
             delete_host,
@@ -172,6 +213,7 @@ pub fn run() {
             ssh_cancel_transfer,
             ssh_connect,
             ssh_write,
+            ssh_ack_output,
             ssh_resize,
             ssh_disconnect,
             ssh_trust_host_key,

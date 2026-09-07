@@ -6,6 +6,7 @@ import { defaultTerminalSettings, type TerminalSettingsDto } from "../../../type
 import type { TrustedHostKey } from "../../../types/ssh";
 import { TransferQueue } from "../../file-transfer/components/TransferQueue";
 import { normalizeTerminalSettings, terminalSettingsChanged } from "../terminalSettingsDraft";
+import { useDialogFocus } from "../../../app/useDialogFocus";
 
 type SettingsDialogProps = {
   open: boolean;
@@ -48,8 +49,8 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const [closePrompt, setClosePrompt] = useState(false);
+  const [saving, setSaving] = useState(false);
   const terminalSettings = useSettingsStore((state) => state.terminalSettings);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const settingsLoading = useSettingsStore((state) => state.loading);
@@ -59,6 +60,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     () => terminalSettingsChanged(draft, terminalSettings),
     [draft, terminalSettings]
   );
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty) setClosePrompt(true); else onClose();
+  };
+  const dialogRef = useDialogFocus<HTMLElement>(open, () => {
+    if (confirmDeleteId) setConfirmDeleteId(undefined); else requestClose();
+  }, saving);
+  const confirmRef = useDialogFocus(open && closePrompt, () => setClosePrompt(false), saving);
 
   const loadKeys = useCallback(async () => {
     setKeysLoading(true);
@@ -75,8 +84,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
 
   useEffect(() => {
     if (!open) return;
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    setActiveSection("general");
+    setClosePrompt(false);
     setDraft(terminalSettings);
     setSaveError(undefined);
     setSaved(false);
@@ -96,11 +104,6 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       })
       .catch((cause) => setAppInfoError(errorMessage(cause)));
 
-    const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-    return () => {
-      window.clearTimeout(focusTimer);
-      previouslyFocusedRef.current?.focus();
-    };
   }, [open]);
 
   useEffect(() => {
@@ -110,55 +113,26 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   }, [activeSection, keysLoaded, keysLoading, loadKeys, open]);
 
   useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (confirmDeleteId) {
-          setConfirmDeleteId(undefined);
-        } else {
-          onClose();
-        }
-        return;
-      }
-
-      if (event.key !== "Tab") return;
-      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-        "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])"
-      ) ?? []);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!dialogRef.current?.contains(document.activeElement)) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [confirmDeleteId, onClose, open]);
-
-  useEffect(() => {
     if (open && settingsLoaded && !dirty) setDraft(terminalSettings);
   }, [dirty, open, settingsLoaded, terminalSettings]);
 
   if (!open) return null;
 
   const applyTerminalSettings = async () => {
+    if (saving) return false;
+    setSaving(true);
     setSaveError(undefined);
     setSaved(false);
     try {
       const updated = await updateTerminalSettings(normalizeTerminalSettings(draft));
       setDraft(updated);
       setSaved(true);
+      return true;
     } catch (cause) {
       setSaveError(errorMessage(cause));
+      return false;
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -195,7 +169,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             ref={closeButtonRef}
             type="button"
             className="settings-close-button"
-            onClick={onClose}
+            onClick={requestClose}
             title="关闭设置（Esc）"
             aria-label="关闭设置"
           >
@@ -260,7 +234,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           <div className="settings-feedback" role="status">
             {saveError ? <span className="settings-error">{saveError}</span> : null}
             {!saveError && saved ? <span className="settings-success">设置已应用</span> : null}
-            {!saveError && !saved && activeSection === "terminal" && dirty ? "有未应用的更改" : null}
+            {!saveError && !saved && dirty ? "有未应用的更改" : null}
           </div>
           <div className="settings-footer-actions">
             {activeSection === "terminal" ? (
@@ -277,14 +251,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 载入默认值
               </button>
             ) : null}
-            <button type="button" className="ghost-button" onClick={onClose}>
+            <button type="button" className="ghost-button" onClick={requestClose} disabled={saving}>
               {activeSection === "terminal" ? "取消" : "关闭"}
             </button>
             {activeSection === "terminal" ? (
               <button
                 type="button"
                 className="primary-button"
-                disabled={!dirty || settingsLoading}
+                disabled={!dirty || settingsLoading || saving}
                 onClick={() => void applyTerminalSettings()}
               >
                 {settingsLoading ? "应用中..." : "应用"}
@@ -293,6 +267,18 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           </div>
         </footer>
       </section>
+      {closePrompt ? <div className="dialog-overlay settings-confirm-overlay">
+        <div ref={confirmRef} className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-title">
+          <div className="dialog-body"><h3 id="unsaved-title">保存未应用的设置？</h3><p>关闭前可以保存更改，或放弃本次修改。</p>
+            {saveError ? <p role="alert" className="dialog-error">{saveError}</p> : null}
+          </div>
+          <div className="dialog-footer">
+            <button className="ghost-button" disabled={saving} onClick={() => setClosePrompt(false)}>继续编辑</button>
+            <button className="ghost-button" disabled={saving} onClick={() => { setClosePrompt(false); onClose(); }}>放弃更改</button>
+            <button className="primary-button" disabled={saving || settingsLoading} onClick={async () => { if (await applyTerminalSettings()) { setClosePrompt(false); onClose(); } }}>{saving ? "保存中..." : "保存并关闭"}</button>
+          </div>
+        </div>
+      </div> : null}
     </div>
   );
 }

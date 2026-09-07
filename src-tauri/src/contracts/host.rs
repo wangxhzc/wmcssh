@@ -122,3 +122,11 @@ pub struct HostFilter {
 pub struct HostListResult {
     pub hosts: Vec<HostDto>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveHostInput {
+    pub host_id: HostId,
+    pub target_host_id: HostId,
+    pub after: bool,
+}
