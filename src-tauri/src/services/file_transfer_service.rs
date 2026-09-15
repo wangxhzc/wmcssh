@@ -36,7 +36,7 @@ pub struct FileTransferService {
     scheduler: super::transfer_scheduler::TransferScheduler,
     host_service: Arc<HostService>,
     sessions: Mutex<HashMap<String, Arc<Mutex<FileTransferSession>>>>,
-    tasks: Mutex<HashMap<String, Arc<TransferTaskControl>>>,
+    tasks: Arc<Mutex<HashMap<String, Arc<TransferTaskControl>>>>,
     host_key_store: Arc<HostKeyStore>,
 }
 
@@ -190,11 +190,24 @@ impl FileTransferService {
         host_service: Arc<HostService>,
         host_key_store: Arc<HostKeyStore>,
     ) -> std::io::Result<Self> {
+        let tasks = Arc::new(Mutex::new(HashMap::new()));
+        let weak_tasks = Arc::downgrade(&tasks);
+        std::thread::Builder::new()
+            .name("transfer-history-cleanup".into())
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let Some(tasks) = weak_tasks.upgrade() else {
+                    break;
+                };
+                if let Ok(mut tasks) = tasks.lock() {
+                    prune_transfer_tasks(&mut tasks, now_millis());
+                };
+            })?;
         Ok(Self {
             scheduler: super::transfer_scheduler::TransferScheduler::new(4)?,
             host_service,
             sessions: Mutex::new(HashMap::new()),
-            tasks: Mutex::new(HashMap::new()),
+            tasks,
             host_key_store,
         })
     }
@@ -430,6 +443,11 @@ impl FileTransferService {
         task.snapshot()
     }
 
+    pub fn delete_transfer_task(&self, transfer_id: &str) -> Result<(), AppErrorDto> {
+        let mut tasks = self.tasks.lock().map_err(|_| transfer_tasks_lock_error())?;
+        delete_transfer_record(&mut tasks, transfer_id)
+    }
+
     fn register_task(&self, task: TransferTask) -> Result<Arc<TransferTaskControl>, AppErrorDto> {
         let mut tasks = self.tasks.lock().map_err(|_| transfer_tasks_lock_error())?;
         if tasks.contains_key(&task.transfer_id) {
@@ -439,7 +457,7 @@ impl FileTransferService {
                 false,
             ));
         }
-        prune_transfer_tasks(&mut tasks);
+        prune_transfer_tasks(&mut tasks, now_millis());
         ensure_transfer_task_capacity(tasks.len())?;
         let transfer_id = task.transfer_id.clone();
         let control = Arc::new(TransferTaskControl::new(task));
@@ -579,35 +597,42 @@ fn validate_transfer_id(transfer_id: &str) -> Result<(), AppErrorDto> {
     }
 }
 
-fn prune_transfer_tasks(tasks: &mut HashMap<String, Arc<TransferTaskControl>>) {
-    if tasks.len() < MAX_RETAINED_TASKS {
-        return;
-    }
-    let mut terminal = tasks
-        .iter()
-        .filter_map(|(id, control)| {
-            let task = control.snapshot().ok()?;
-            matches!(
-                task.status,
-                TransferStatus::Completed | TransferStatus::Failed | TransferStatus::Cancelled
-            )
-            .then_some((id.clone(), task.finished_at.unwrap_or(task.created_at)))
+fn prune_transfer_tasks(tasks: &mut HashMap<String, Arc<TransferTaskControl>>, now: i64) {
+    tasks.retain(|_, control| {
+        !control.snapshot().is_ok_and(|task| {
+            task.status == TransferStatus::Completed
+                && task
+                    .finished_at
+                    .is_some_and(|finished| now.saturating_sub(finished) >= 60_000)
         })
-        .collect::<Vec<_>>();
-    terminal.sort_by_key(|(_, finished_at)| *finished_at);
-    let remove_count = tasks
-        .len()
-        .saturating_sub(MAX_RETAINED_TASKS.saturating_sub(1));
-    for (id, _) in terminal.into_iter().take(remove_count) {
-        tasks.remove(&id);
+    });
+}
+
+fn delete_transfer_record(
+    tasks: &mut HashMap<String, Arc<TransferTaskControl>>,
+    transfer_id: &str,
+) -> Result<(), AppErrorDto> {
+    if let Some(control) = tasks.get(transfer_id) {
+        if matches!(
+            control.snapshot()?.status,
+            TransferStatus::Queued | TransferStatus::Running
+        ) {
+            return Err(AppErrorDto::new(
+                AppErrorCode::Unsupported,
+                "请先取消正在进行的传输",
+                false,
+            ));
+        }
     }
+    tasks.remove(transfer_id);
+    Ok(())
 }
 
 fn ensure_transfer_task_capacity(task_count: usize) -> Result<(), AppErrorDto> {
     if task_count >= MAX_RETAINED_TASKS {
         Err(AppErrorDto::new(
             AppErrorCode::Unsupported,
-            "后台传输任务过多，请等待部分任务完成后重试",
+            "后台传输记录过多，请删除已结束的记录或等待成功记录自动清理后重试",
             true,
         ))
     } else {
@@ -1324,6 +1349,57 @@ mod tests {
         assert_eq!(task.status, TransferStatus::Cancelled);
         assert!(task.started_at.is_none());
         assert!(task.finished_at.is_some());
+    }
+
+    #[test]
+    fn only_successful_records_expire_after_sixty_seconds() {
+        let mut tasks = HashMap::new();
+        for (id, status) in [
+            ("completed", TransferStatus::Completed),
+            ("failed", TransferStatus::Failed),
+            ("cancelled", TransferStatus::Cancelled),
+            ("running", TransferStatus::Running),
+            ("queued", TransferStatus::Queued),
+        ] {
+            let mut task = test_task();
+            task.status = status;
+            task.finished_at = Some(1000);
+            tasks.insert(id.to_string(), Arc::new(TransferTaskControl::new(task)));
+        }
+        prune_transfer_tasks(&mut tasks, 60_999);
+        assert_eq!(tasks.len(), 5);
+        prune_transfer_tasks(&mut tasks, 61_000);
+        assert!(!tasks.contains_key("completed"));
+        assert_eq!(tasks.len(), 4);
+        prune_transfer_tasks(&mut tasks, i64::MAX);
+        assert_eq!(tasks.len(), 4);
+    }
+
+    #[test]
+    fn deletion_rejects_active_tasks_and_is_idempotent_for_finished_tasks() {
+        for status in [
+            TransferStatus::Queued,
+            TransferStatus::Running,
+            TransferStatus::Completed,
+            TransferStatus::Failed,
+            TransferStatus::Cancelled,
+        ] {
+            let active = matches!(status, TransferStatus::Queued | TransferStatus::Running);
+            let mut task = test_task();
+            task.status = status;
+            let mut tasks = HashMap::from([(
+                "task-1".to_string(),
+                Arc::new(TransferTaskControl::new(task)),
+            )]);
+            assert_eq!(
+                delete_transfer_record(&mut tasks, "task-1").is_err(),
+                active
+            );
+            assert_eq!(tasks.contains_key("task-1"), active);
+            if !active {
+                assert!(delete_transfer_record(&mut tasks, "task-1").is_ok());
+            }
+        }
     }
 
     #[test]

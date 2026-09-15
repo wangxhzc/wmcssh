@@ -1,4 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
+import { lstat } from "@tauri-apps/plugin-fs";
 import type {
   DownloadRemotePathInput,
   ListRemoteDirectoryInput,
@@ -12,6 +14,18 @@ import type {
   UploadRemoteFileInput
 } from "../../types/fileTransfer";
 import { normalizeAppError } from "../../types/errors";
+
+export function listenFileDrop(handler: (event: DragDropEvent) => void) {
+  return getCurrentWebview().onDragDropEvent((event) => handler(event.payload));
+}
+
+export async function localUploadKind(path: string): Promise<"file" | "directory"> {
+  const info = await lstat(path);
+  if (info.isSymlink || (!info.isFile && !info.isDirectory)) {
+    throw new Error("仅支持普通文件或文件夹");
+  }
+  return info.isDirectory ? "directory" : "file";
+}
 
 export async function openFileTransferSession(
   input: OpenFileTransferSessionInput
@@ -93,6 +107,14 @@ export async function getTransferTask(transferId: string): Promise<TransferTask>
 export async function cancelTransfer(transferId: string): Promise<TransferTask> {
   try {
     return await invoke<TransferTask>("ssh_cancel_transfer", { input: { transferId } });
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
+export async function deleteTransferTask(transferId: string): Promise<void> {
+  try {
+    await invoke<void>("ssh_delete_transfer_task", { input: { transferId } });
   } catch (error) {
     throw normalizeAppError(error);
   }

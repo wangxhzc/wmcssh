@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { cancelTransfer, listTransferTasks } from "../services/tauri/fileTransferApi";
+import { cancelTransfer, deleteTransferTask, listTransferTasks } from "../services/tauri/fileTransferApi";
 import type { TransferProgress, TransferTask } from "../types/fileTransfer";
 
 type TransferQueueStore = {
@@ -11,6 +11,7 @@ type TransferQueueStore = {
   upsertTask: (task: TransferTask) => void;
   applyProgress: (progress: TransferProgress) => void;
   cancelTask: (transferId: string) => Promise<void>;
+  deleteTask: (transferId: string) => Promise<void>;
 };
 
 function messageFromError(cause: unknown) {
@@ -29,6 +30,8 @@ function upsert(tasks: TransferTask[], task: TransferTask) {
   return next;
 }
 
+let deletionVersion = 0;
+
 export const useTransferQueueStore = create<TransferQueueStore>((set, get) => ({
   tasks: [],
   loading: false,
@@ -37,8 +40,10 @@ export const useTransferQueueStore = create<TransferQueueStore>((set, get) => ({
   async loadTasks() {
     if (get().loading) return;
     set({ loading: true, error: undefined });
+    const version = deletionVersion;
     try {
-      set({ tasks: await listTransferTasks(), loaded: true });
+      const tasks = await listTransferTasks();
+      if (version === deletionVersion) set({ tasks, loaded: true });
     } catch (cause) {
       set({ error: messageFromError(cause) });
     } finally {
@@ -71,6 +76,18 @@ export const useTransferQueueStore = create<TransferQueueStore>((set, get) => ({
     try {
       const task = await cancelTransfer(transferId);
       set((state) => ({ tasks: upsert(state.tasks, task) }));
+    } catch (cause) {
+      set({ error: messageFromError(cause) });
+      throw cause;
+    }
+  },
+
+  async deleteTask(transferId) {
+    set({ error: undefined });
+    try {
+      await deleteTransferTask(transferId);
+      deletionVersion += 1;
+      set((state) => ({ tasks: state.tasks.filter((task) => task.transferId !== transferId) }));
     } catch (cause) {
       set({ error: messageFromError(cause) });
       throw cause;

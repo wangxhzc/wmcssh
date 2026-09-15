@@ -14,6 +14,17 @@ export function App() {
   const loadTerminalSettings = useSettingsStore((state) => state.loadTerminalSettings);
 
   useEffect(() => {
+    const handleContextMenu = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && (target.closest("input, textarea") || target.isContentEditable)) return;
+      event.preventDefault();
+    };
+    document.addEventListener("contextmenu", handleContextMenu, true);
+    return () => document.removeEventListener("contextmenu", handleContextMenu, true);
+  }, []);
+
+  useEffect(() => {
     void loadHosts().catch(() => undefined);
   }, [loadHosts]);
 

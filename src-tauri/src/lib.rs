@@ -211,6 +211,7 @@ pub fn run() {
             ssh_list_transfer_tasks,
             ssh_get_transfer_task,
             ssh_cancel_transfer,
+            ssh_delete_transfer_task,
             ssh_connect,
             ssh_write,
             ssh_ack_output,

@@ -116,3 +116,13 @@ pub async fn ssh_cancel_transfer(
         .file_transfer_service
         .cancel_transfer(&input.transfer_id)
 }
+
+#[tauri::command]
+pub async fn ssh_delete_transfer_task(
+    state: State<'_, AppState>,
+    input: GetTransferTaskInput,
+) -> Result<(), AppErrorDto> {
+    state
+        .file_transfer_service
+        .delete_transfer_task(&input.transfer_id)
+}

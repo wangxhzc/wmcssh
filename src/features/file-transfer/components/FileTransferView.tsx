@@ -7,6 +7,7 @@ import {
   enqueueUploadRemoteDirectory,
   enqueueUploadRemoteFile,
   listRemoteDirectory,
+  localUploadKind,
   openFileTransferSession
 } from "../../../services/tauri/fileTransferApi";
 import { useTerminalStore } from "../../../stores/terminalStore";
@@ -24,8 +25,10 @@ import { confirmAndTrustHostKey } from "../../hosts/hostKeyTrust";
 import { getHost } from "../../../services/tauri/hostApi";
 import { requestConnectionCredentials } from "../../hosts/connectionCredentials";
 import { rememberConnectionCredentials } from "../../terminal/actions";
-import { TransferQueue } from "./TransferQueue";
+import { TransferQueuePanel } from "./TransferQueuePanel";
 import { formatTransferBytes } from "../transferQueue";
+import { useFileDrop } from "../useFileDrop";
+import { selectFile, reconcileSelection, type FileSelection } from "../fileSelection";
 import type { ListRemoteDirectoryResult } from "../../../types/fileTransfer";
 
 type FileTransferViewProps = {
@@ -103,13 +106,19 @@ async function collectLocalDirectoryPayload(rootPath: string) {
 
 export function FileTransferView({ tabId, hostId, transferSessionId, active }: FileTransferViewProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  const dropTargetRef = useRef<HTMLDivElement | null>(null);
+  const dropSubmitting = useRef(false);
   const [state, setState] = useState<FileTransferLoadState>({ status: "idle" });
   const [directory, setDirectory] = useState<ListRemoteDirectoryResult>();
+  const [selection, setSelection] = useState<FileSelection>({ paths: [] });
+  const selectedEntries = directory?.entries.filter((entry) => selection.paths.includes(entry.path)) ?? [];
   const requestedPath = useRef<string | undefined>(undefined);
   const loadVersion = useRef(0);
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [queueVisible, setQueueVisible] = useState(false);
+  const [queueManuallyOpened, setQueueManuallyOpened] = useState(false);
+  const [queueHeight, setQueueHeight] = useState(180);
   const [contextMenu, setContextMenu] = useState<{ entry: RemoteFileEntry; x: number; y: number } | null>(null);
   const [uploadMenu, setUploadMenu] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -119,6 +128,40 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const bindFileTransferSession = useTerminalStore((store) => store.bindFileTransferSession);
   const applyTransferProgress = useTransferQueueStore((store) => store.applyProgress);
   const upsertTransferTask = useTransferQueueStore((store) => store.upsertTask);
+  const tasks = useTransferQueueStore((store) => store.tasks);
+  const loadTasks = useTransferQueueStore((store) => store.loadTasks);
+  const refreshedUploads = useRef(new Set<string>());
+  const pendingUploadRefreshes = useRef(new Set<string>());
+  const sessionTasks = tasks.filter((task) => task.transferSessionId === transferSessionId);
+  const hasPendingTransfers = sessionTasks.some((task) => task.status === "queued" || task.status === "running");
+  const completedUploadIds = sessionTasks
+    .filter((task) => task.direction === "upload" && task.status === "completed")
+    .map((task) => task.transferId).sort().join(",");
+  const canAutoCloseQueue = sessionTasks.length > 0
+    && sessionTasks.every((task) => task.status === "completed" || task.status === "cancelled");
+
+  useEffect(() => {
+    if (!transferSessionId) return;
+    void loadTasks();
+    const timer = window.setInterval(() => void loadTasks(), 1000);
+    return () => window.clearInterval(timer);
+  }, [loadTasks, transferSessionId]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(undefined), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (directory?.fallbackToRoot) setNotice("未获取到用户家目录，已自动回退到根目录 `/`。");
+  }, [directory?.fallbackToRoot]);
+
+  useEffect(() => {
+    if (!queueVisible || queueManuallyOpened || !canAutoCloseQueue) return;
+    const timer = window.setTimeout(() => setQueueVisible(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [queueVisible, queueManuallyOpened, canAutoCloseQueue]);
 
   const createProgressChannel = (transferId: string) => {
     const channel = new Channel<TransferProgress>();
@@ -128,6 +171,49 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     };
     return channel;
   };
+
+  const dropHovered = useFileDrop(dropTargetRef, active && !busy && state.status === "ready" && !!transferSessionId,
+    async (paths) => {
+      if (dropSubmitting.current || busy || state.status !== "ready" || !transferSessionId) return;
+      dropSubmitting.current = true;
+      setBusy(true);
+      setContextMenu(null);
+      setUploadMenu(null);
+      setNotice(undefined);
+      const remoteDirPath = state.path;
+      let submitted = 0;
+      const errors: string[] = [];
+      try {
+        for (const localPath of new Set(paths)) {
+          try {
+            const name = pathName(localPath);
+            if (!name) throw new Error("文件名无效");
+            const kind = await localUploadKind(localPath);
+            const transferId = crypto.randomUUID();
+            const channel = createProgressChannel(transferId);
+            const task = kind === "directory"
+              ? await enqueueUploadRemoteDirectory({
+                transferId, transferSessionId, remoteDirPath, directoryName: name,
+                ...await collectLocalDirectoryPayload(localPath)
+              }, channel)
+              : await enqueueUploadRemoteFile({
+                transferId, transferSessionId, remoteDirPath, fileName: name, localFilePath: localPath
+              }, channel);
+            upsertTransferTask(task);
+            submitted += 1;
+            setQueueVisible(true);
+          } catch (error) {
+            errors.push(`${pathName(localPath) ?? localPath}：${normalizeAppError(error).message}`);
+          }
+        }
+        setNotice(errors.length
+          ? `已加入 ${submitted} 个上传任务；${errors.length} 项失败：${errors.join("；")}`
+          : `已将 ${submitted} 个项目加入后台上传队列`);
+      } finally {
+        dropSubmitting.current = false;
+        setBusy(false);
+      }
+    }, (error) => setNotice(`拖拽上传失败：${normalizeAppError(error).message}`));
 
   const loadDirectory = useCallback(
     async (path?: string) => {
@@ -171,6 +257,8 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         if (version !== loadVersion.current) return;
         requestedPath.current = result.path;
         setDirectory(result);
+        setSelection((previous) => reconcileSelection(previous, result.path, result.entries.map((entry) => entry.path)));
+        setContextMenu(null);
         setState({
           status: "ready",
           path: result.path,
@@ -191,6 +279,24 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
       void loadDirectory();
     }
   }, [active, loadDirectory, state.status]);
+
+  useEffect(() => {
+    completedUploadIds.split(",").forEach((id) => {
+      if (id && !refreshedUploads.current.has(id)) pendingUploadRefreshes.current.add(id);
+    });
+    if (!active || !directory || hasPendingTransfers || state.status === "loading") return;
+    const pendingIds = [...pendingUploadRefreshes.current];
+    if (pendingIds.length === 0) return;
+    // Allow the worker to release the SFTP session before reading the directory.
+    const timer = window.setTimeout(() => {
+      pendingIds.forEach((id) => {
+        refreshedUploads.current.add(id);
+        pendingUploadRefreshes.current.delete(id);
+      });
+      void loadDirectory(directory.path);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [active, completedUploadIds, directory, hasPendingTransfers, loadDirectory, state.status]);
 
   useEffect(() => {
     if (!contextMenu && !uploadMenu) return;
@@ -335,6 +441,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   };
 
   const handleDownload = async (entry: RemoteFileEntry) => {
+    if (busy) return;
     if (!transferSessionId) {
       setNotice("下载失败：文件传输会话未就绪");
       return;
@@ -401,11 +508,43 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     }
   };
 
-  const handleCopyPath = async (entry: RemoteFileEntry) => {
+  const downloadSelection = async () => {
+    if (busy || !transferSessionId || selectedEntries.length === 0) return;
+    if (selectedEntries.length === 1) return handleDownload(selectedEntries[0]);
+    const entries = selectedEntries;
+    setBusy(true);
+    setContextMenu(null);
+    try {
+      const root = await open({ multiple: false, directory: true });
+      if (!root || Array.isArray(root)) return;
+      let submitted = 0;
+      const errors: string[] = [];
+      for (const entry of entries) {
+        try {
+          const transferId = crypto.randomUUID();
+          const task = await enqueueDownloadRemotePath({
+            transferId, transferSessionId, remotePath: entry.path, localPath: joinLocalPath(root, entry.name)
+          }, createProgressChannel(transferId));
+          upsertTransferTask(task);
+          submitted += 1;
+          setQueueVisible(true);
+        } catch (error) {
+          errors.push(`${entry.name}：${normalizeAppError(error).message}`);
+        }
+      }
+      setNotice(`已加入 ${submitted} 个下载任务${errors.length ? `；失败：${errors.join("；")}` : ""}`);
+    } catch (error) {
+      setNotice(`下载失败：${normalizeAppError(error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCopyPath = async () => {
     setContextMenu(null);
 
     try {
-      await navigator.clipboard.writeText(entry.path);
+      await navigator.clipboard.writeText(selectedEntries.map((entry) => entry.path).join("\n"));
       setNotice("已复制路径");
     } catch (error) {
       console.error("[wmcssh][file-transfer] copy path failed", error);
@@ -422,16 +561,35 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     }
   };
 
-  const renderRow = (entry: RemoteFileEntry) => {
+  const renderRow = (entry: RemoteFileEntry, index: number) => {
     const isDirectory = entry.entryType === "directory";
 
     return (
       <div
         key={entry.path}
-        className="file-transfer-entry"
+        id={`file-entry-${tabId}-${index}`}
+        role="option"
+        aria-selected={selection.paths.includes(entry.path)}
+        className={`file-transfer-entry${selection.paths.includes(entry.path) ? " selected" : ""}${selection.focus === entry.path ? " focused" : ""}`}
+        onClick={(event) => {
+          if (state.status === "loading") return;
+          listRef.current?.focus();
+          setSelection((previous) => selectFile(previous, directory?.entries.map((item) => item.path) ?? [], entry.path,
+            { range: event.shiftKey, toggle: event.ctrlKey || event.metaKey }));
+        }}
+        onDoubleClick={(event) => {
+          if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !busy && state.status !== "loading" && isDirectory) {
+            void loadDirectory(entry.path);
+          }
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
+          if (state.status === "loading") return;
+          listRef.current?.focus();
+          setSelection((previous) => previous.paths.includes(entry.path)
+            ? { ...previous, focus: entry.path }
+            : { ...previous, paths: [entry.path], anchor: entry.path, focus: entry.path });
           setContextMenu({
             entry,
             x: event.clientX,
@@ -440,18 +598,16 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         }}
       >
         <span className={`file-transfer-entry-icon ${entry.entryType}`}>{isDirectory ? "DIR" : "FILE"}</span>
-        {isDirectory ? <button className="file-entry-open" disabled={state.status === "loading"} onClick={() => void loadDirectory(entry.path)} title={`打开目录 ${entry.name}`}>{entry.name}</button>
-          : <span className="file-transfer-entry-name" title={entry.name}>{entry.name}</span>}
+        <span className="file-transfer-entry-name" title={entry.name}>{entry.name}</span>
         <span className="file-transfer-entry-meta">
           {isDirectory ? "目录" : entry.size !== undefined ? formatTransferBytes(entry.size) : "大小未知"}
         </span>
-        <button className="ghost-button" disabled={busy || state.status === "loading"} aria-label={`下载 ${entry.name}`} onClick={() => void handleDownload(entry)}>下载</button>
       </div>
     );
   };
 
   return (
-    <div className="file-transfer-view">
+    <div ref={dropTargetRef} className={`file-transfer-view${dropHovered ? " drop-hovered" : ""}`}>
       <div className="file-transfer-toolbar">
         <button
           type="button"
@@ -488,7 +644,10 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         <button
           type="button"
           className={`ghost-button${queueVisible ? " active" : ""}`}
-          onClick={() => setQueueVisible((visible) => !visible)}
+          onClick={() => {
+            setQueueManuallyOpened(!queueVisible);
+            setQueueVisible(!queueVisible);
+          }}
           aria-expanded={queueVisible}
           aria-controls={`transfer-queue-${tabId}`}
         >
@@ -497,15 +656,14 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         <div className="file-transfer-path">
           {directory?.path ?? requestedPath.current ?? (state.status === "error" ? "尚未载入目录" : "正在连接远程目录...")}
         </div>
+        <button type="button" className="ghost-button" disabled={busy || state.status === "loading" || selectedEntries.length === 0}
+          onClick={() => void downloadSelection()}>
+          {selectedEntries.length ? `下载 (${selectedEntries.length})` : "下载"}
+        </button>
       </div>
 
-      {queueVisible ? (
-        <div id={`transfer-queue-${tabId}`} className="file-transfer-queue-panel">
-          <TransferQueue transferSessionId={transferSessionId} compact />
-        </div>
-      ) : null}
-
-      {notice ? <div className="file-transfer-note">{notice}</div> : null}
+      <div className="file-transfer-notifications">
+      {notice ? <div key={notice} className="file-transfer-note transient" role="status">{notice}</div> : null}
 
       {state.status === "loading" ? <div className="file-transfer-note" role="status">{directory ? "正在刷新目录..." : "正在加载远程目录..."}</div> : null}
 
@@ -525,13 +683,51 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         </div>
       ) : null}
 
+      </div>
+
       {directory ? (
         <>
-          {directory.fallbackToRoot ? (
-            <div className="file-transfer-note">未获取到用户家目录，已自动回退到根目录 `/`。</div>
-          ) : null}
           <div className="file-transfer-list-scroll-area">
-            <div ref={listRef} className="file-transfer-list">
+            <div ref={listRef} className="file-transfer-list" role="listbox" aria-label="远端文件" aria-multiselectable="true" tabIndex={0}
+              aria-activedescendant={selection.focus ? `file-entry-${tabId}-${directory.entries.findIndex((entry) => entry.path === selection.focus)}` : undefined}
+              onClick={(event) => {
+                if (!(event.target as HTMLElement).closest('[role="option"]')) {
+                  setSelection({ paths: [], directory: directory.path });
+                  setContextMenu(null);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || state.status === "loading" || contextMenu) return;
+                const entries = directory.entries;
+                const order = entries.map((entry) => entry.path);
+                const modifier = event.ctrlKey || event.metaKey;
+                if (modifier && event.key.toLowerCase() === "a") {
+                  event.preventDefault();
+                  setSelection({ ...selection, paths: order, anchor: selection.anchor ?? order[0], focus: selection.focus ?? order[0] });
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setSelection({ paths: [], directory: directory.path });
+                } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) && entries.length) {
+                  event.preventDefault();
+                  const current = order.indexOf(selection.focus ?? "");
+                  const index = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1
+                    : current < 0 ? (event.key === "ArrowUp" ? entries.length - 1 : 0)
+                    : Math.max(0, Math.min(entries.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)));
+                  const path = order[index];
+                  setSelection((previous) => modifier && !event.shiftKey ? { ...previous, focus: path }
+                    : selectFile(previous, order, path, { range: event.shiftKey, toggle: modifier }));
+                  document.getElementById(`file-entry-${tabId}-${index}`)?.scrollIntoView({ block: "nearest" });
+                } else if (event.key === " " && selection.focus) {
+                  event.preventDefault();
+                  setSelection((previous) => selectFile(previous, order, selection.focus!, { toggle: modifier, range: event.shiftKey }));
+                } else if (event.key === "Enter" && !busy) {
+                  const entry = entries.find((item) => item.path === selection.focus);
+                  if (entry?.entryType === "directory") {
+                    event.preventDefault();
+                    void loadDirectory(entry.path);
+                  }
+                }
+              }}>
               {directory.entries.length > 0 ? directory.entries.map(renderRow) : (
                 <div className="file-transfer-message">当前目录为空。</div>
               )}
@@ -539,6 +735,11 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
             <CustomScrollbar scrollRef={listRef} />
           </div>
         </>
+      ) : null}
+
+      {queueVisible ? (
+        <TransferQueuePanel id={`transfer-queue-${tabId}`} transferSessionId={transferSessionId}
+          height={queueHeight} onHeightChange={setQueueHeight} />
       ) : null}
 
       {contextMenu ? (
@@ -554,14 +755,14 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         >
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void handleDownload(contextMenu.entry)}
+            disabled={busy || state.status === "loading"}
+            onClick={() => void downloadSelection()}
           >
-            下载
+            下载{selectedEntries.length > 1 ? ` (${selectedEntries.length})` : ""}
           </button>
           <button
             type="button"
-            onClick={() => void handleCopyPath(contextMenu.entry)}
+            onClick={() => void handleCopyPath()}
           >
             复制路径
           </button>

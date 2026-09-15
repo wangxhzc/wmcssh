@@ -33,6 +33,8 @@ export function TransferQueue({ transferSessionId, compact = false }: TransferQu
   const error = useTransferQueueStore((state) => state.error);
   const loadTasks = useTransferQueueStore((state) => state.loadTasks);
   const cancelTask = useTransferQueueStore((state) => state.cancelTask);
+  const deleteTask = useTransferQueueStore((state) => state.deleteTask);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(() => new Set());
   const visibleTasks = useMemo(() => tasks
     .filter((task) => !transferSessionId || task.transferSessionId === transferSessionId)
@@ -52,6 +54,21 @@ export function TransferQueue({ transferSessionId, compact = false }: TransferQu
       // The shared store exposes the actionable backend error in this panel.
     } finally {
       setCancellingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(transferId);
+        return next;
+      });
+    }
+  };
+
+  const requestDelete = async (transferId: string) => {
+    setDeletingIds((ids) => new Set(ids).add(transferId));
+    try {
+      await deleteTask(transferId);
+    } catch {
+      // The shared store displays deletion errors in this panel.
+    } finally {
+      setDeletingIds((ids) => {
         const next = new Set(ids);
         next.delete(transferId);
         return next;
@@ -104,7 +121,17 @@ export function TransferQueue({ transferSessionId, compact = false }: TransferQu
                   >
                     {cancelling ? "取消中..." : "取消"}
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={deletingIds.has(task.transferId)}
+                    onClick={() => void requestDelete(task.transferId)}
+                    title="删除传输记录"
+                  >
+                    {deletingIds.has(task.transferId) ? "删除中..." : "删除记录"}
+                  </button>
+                )}
               </div>
               <div className="transfer-task-paths">
                 <span title={task.sourcePath}>{task.sourcePath}</span>
