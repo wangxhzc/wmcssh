@@ -103,6 +103,9 @@ body,
   --terminal-scrollbar-gap: 1px;
   --terminal-tab-height: 25px;
   --terminal-tab-font-size: 12px;
+  --context-menu-width: 180px;
+  --context-menu-font-size: 12px;
+  --context-menu-line-height: 20px;
   --app-bg: #1c1c1c;
   --sidebar-bg: #181818;
   --panel-bg: #181818;
@@ -549,10 +552,6 @@ textarea::placeholder {
   overflow: auto;
 }
 
-.file-transfer-context-menu {
-  min-width: 140px;
-}
-
 .file-transfer-entry {
   width: 100%;
   display: grid;
@@ -764,7 +763,10 @@ textarea::placeholder {
   position: fixed;
   z-index: 2000;
   display: grid;
-  min-width: 180px;
+  width: var(--context-menu-width);
+  max-width: calc(100vw - 16px);
+  font-size: var(--context-menu-font-size);
+  line-height: var(--context-menu-line-height);
   padding: 5px;
   gap: 4px;
   border: 1px solid var(--border);
@@ -803,10 +805,6 @@ textarea::placeholder {
 .app-context-menu .menu-danger:hover:not(:disabled),
 .app-context-menu .menu-danger:focus-visible:not(:disabled) {
   background: color-mix(in srgb, var(--error) 14%, var(--panel-bg-2));
-}
-
-.terminal-context-menu {
-  min-width: 160px;
 }
 
 .host-card-main {
