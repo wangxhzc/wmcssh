@@ -798,6 +798,22 @@ textarea::placeholder {
   cursor: not-allowed;
 }
 
+.editing-context-menu {
+  z-index: 2200;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+.editing-context-menu button.active:not(:disabled) {
+  background: var(--selection-bg);
+}
+
+.editing-context-menu-error {
+  padding: 4px 10px;
+  color: var(--error);
+  overflow-wrap: anywhere;
+}
+
 .app-context-menu .menu-danger {
   color: var(--error);
 }

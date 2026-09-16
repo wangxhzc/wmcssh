@@ -5,6 +5,7 @@ import { useHostStore } from "../stores/hostStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { ConnectionCredentialsDialog } from "../features/hosts/components/ConnectionCredentialsDialog";
 import { VaultUnlockDialog } from "../features/vault/VaultUnlockDialog";
+import { EditingContextMenu } from "./EditingContextMenu";
 
 export function App() {
   const [vaultUnlocked, setVaultUnlocked] = useState(false);
@@ -14,17 +15,6 @@ export function App() {
   const loadTerminalSettings = useSettingsStore((state) => state.loadTerminalSettings);
 
   useEffect(() => {
-    const handleContextMenu = (event: MouseEvent) => {
-      const target = event.target;
-      if (target instanceof HTMLElement
-        && (target.closest("input, textarea") || target.isContentEditable)) return;
-      event.preventDefault();
-    };
-    document.addEventListener("contextmenu", handleContextMenu, true);
-    return () => document.removeEventListener("contextmenu", handleContextMenu, true);
-  }, []);
-
-  useEffect(() => {
     void loadHosts().catch(() => undefined);
   }, [loadHosts]);
 
@@ -32,5 +22,5 @@ export function App() {
     void loadTerminalSettings().catch(() => undefined);
   }, [loadTerminalSettings]);
 
-  return <><AppShell /><ConnectionCredentialsDialog />{!vaultUnlocked ? <VaultUnlockDialog onUnlocked={handleVaultUnlocked} /> : null}</>;
+  return <><AppShell /><ConnectionCredentialsDialog />{!vaultUnlocked ? <VaultUnlockDialog onUnlocked={handleVaultUnlocked} /> : null}<EditingContextMenu /></>;
 }
