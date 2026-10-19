@@ -17,6 +17,22 @@ export type ListRemoteDirectoryInput = {
   path?: string;
 };
 
+export type DeleteRemotePathInput = {
+  transferSessionId: SessionId;
+  path: string;
+};
+
+export type OpenRemoteFileInput = {
+  transferSessionId: SessionId;
+  path: string;
+};
+
+export type RenameRemotePathInput = {
+  transferSessionId: SessionId;
+  path: string;
+  newName: string;
+};
+
 export type ListRemoteDirectoryResult = {
   hostId: HostId;
   path: string;

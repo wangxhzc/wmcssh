@@ -5,7 +5,41 @@ use crate::contracts::{
     ListRemoteDirectoryResult, OpenFileTransferSessionInput, OpenFileTransferSessionResult,
     TransferProgress, TransferTask, UploadRemoteDirectoryInput, UploadRemoteFileInput,
 };
-use tauri::{ipc::Channel, State};
+use crate::contracts::{DeleteRemotePathInput, OpenRemoteFileInput, RenameRemotePathInput};
+use tauri::{ipc::Channel, Manager, State};
+
+#[tauri::command]
+pub async fn ssh_rename_remote_path(
+    state: State<'_, AppState>,
+    input: RenameRemotePathInput,
+) -> Result<String, AppErrorDto> {
+    let service = state.file_transfer_service.clone();
+    run_blocking(move || service.rename_remote_path(input)).await
+}
+
+#[tauri::command]
+pub async fn ssh_open_remote_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    input: OpenRemoteFileInput,
+) -> Result<(), AppErrorDto> {
+    let service = state.file_transfer_service.clone();
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(AppErrorDto::io)?
+        .join("opened-files");
+    run_blocking(move || service.open_remote_file(input, &cache_dir)).await
+}
+
+#[tauri::command]
+pub async fn ssh_delete_remote_path(
+    state: State<'_, AppState>,
+    input: DeleteRemotePathInput,
+) -> Result<(), AppErrorDto> {
+    let service = state.file_transfer_service.clone();
+    run_blocking(move || service.delete_remote_path(input)).await
+}
 
 async fn run_blocking<T, F>(operation: F) -> Result<T, AppErrorDto>
 where

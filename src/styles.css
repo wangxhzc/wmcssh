@@ -868,6 +868,10 @@ textarea::placeholder {
   overflow: hidden;
 }
 
+.rename-dialog {
+  width: min(420px, 100%);
+}
+
 .dialog-header,
 .dialog-footer {
   display: flex;

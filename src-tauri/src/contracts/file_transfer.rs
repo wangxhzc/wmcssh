@@ -10,6 +10,28 @@ pub struct ListRemoteDirectoryInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeleteRemotePathInput {
+    pub transfer_session_id: SessionId,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRemoteFileInput {
+    pub transfer_session_id: SessionId,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameRemotePathInput {
+    pub transfer_session_id: SessionId,
+    pub path: String,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenFileTransferSessionInput {
     pub host_id: HostId,
     pub username: Option<String>,

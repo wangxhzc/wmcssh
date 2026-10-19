@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { readDir } from "@tauri-apps/plugin-fs";
 import {
   enqueueDownloadRemotePath,
   enqueueUploadRemoteDirectory,
   enqueueUploadRemoteFile,
+  deleteRemotePath,
   listRemoteDirectory,
   localUploadKind,
-  openFileTransferSession
+  openFileTransferSession,
+  openRemoteFile,
+  renameRemotePath
 } from "../../../services/tauri/fileTransferApi";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import { useTransferQueueStore } from "../../../stores/transferQueueStore";
@@ -26,6 +29,7 @@ import { getHost } from "../../../services/tauri/hostApi";
 import { requestConnectionCredentials } from "../../hosts/connectionCredentials";
 import { rememberConnectionCredentials } from "../../terminal/actions";
 import { TransferQueuePanel } from "./TransferQueuePanel";
+import { RenameDialog } from "./RenameDialog";
 import { formatTransferBytes } from "../transferQueue";
 import { useFileDrop } from "../useFileDrop";
 import { selectFile, reconcileSelection, type FileSelection } from "../fileSelection";
@@ -116,6 +120,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const loadVersion = useRef(0);
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [renameEntry, setRenameEntry] = useState<RemoteFileEntry | null>(null);
   const [queueVisible, setQueueVisible] = useState(false);
   const [queueManuallyOpened, setQueueManuallyOpened] = useState(false);
   const [queueHeight, setQueueHeight] = useState(180);
@@ -540,6 +545,66 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
     }
   };
 
+  const handleRename = async (newName: string) => {
+    if (!renameEntry || !transferSessionId || !directory) throw new Error("文件传输会话未就绪");
+    const path = directory.path;
+    const renamedPath = await renameRemotePath({ transferSessionId, path: renameEntry.path, newName });
+    await loadDirectory(path);
+    setSelection({ paths: [renamedPath], anchor: renamedPath, focus: renamedPath, directory: path });
+    setNotice(`已重命名为 ${newName}`);
+  };
+
+  const handleOpenFile = async (entry: RemoteFileEntry) => {
+    if (busy || state.status !== "ready" || !transferSessionId || entry.entryType !== "file") return;
+    setContextMenu(null);
+    if (entry.size !== undefined && entry.size > 10 * 1024 * 1024) {
+      setNotice("文件太大，仅允许打开小于等于 10 MiB 的文件");
+      return;
+    }
+    setBusy(true);
+    setNotice(`正在下载并打开 ${entry.name}…`);
+    try {
+      await openRemoteFile({ transferSessionId, path: entry.path });
+      setNotice(`已使用系统默认程序打开 ${entry.name}`);
+    } catch (error) {
+      setNotice(`打开失败：${normalizeAppError(error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteSelection = async () => {
+    if (busy || state.status !== "ready" || !transferSessionId || !selectedEntries.length) return;
+    const entries = [...selectedEntries];
+    const path = state.path;
+    setContextMenu(null);
+    setBusy(true);
+    let deleted = 0;
+    const errors: string[] = [];
+    try {
+      const names = entries.slice(0, 5).map((entry) => entry.name).join("、");
+      const accepted = await confirm(
+        `确定永久删除 ${entries.length} 个远端条目？\n${names}${entries.length > 5 ? "等" : ""}\n文件夹及其内容将一并删除，此操作无法撤销。`,
+        { title: "删除远端文件", kind: "warning", okLabel: "删除", cancelLabel: "取消" }
+      );
+      if (!accepted) return;
+      for (const entry of entries) {
+        try {
+          await deleteRemotePath({ transferSessionId, path: entry.path });
+          deleted += 1;
+        } catch (error) {
+          errors.push(`${entry.name}：${normalizeAppError(error).message}`);
+        }
+      }
+      await loadDirectory(path);
+      setNotice(`已删除 ${deleted} 个条目${errors.length ? `；${errors.length} 项失败：${errors.join("；")}` : ""}`);
+    } catch (error) {
+      setNotice(`删除失败：${normalizeAppError(error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCopyPath = async () => {
     setContextMenu(null);
 
@@ -578,8 +643,9 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
             { range: event.shiftKey, toggle: event.ctrlKey || event.metaKey }));
         }}
         onDoubleClick={(event) => {
-          if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !busy && state.status !== "loading" && isDirectory) {
-            void loadDirectory(entry.path);
+          if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !busy && state.status !== "loading") {
+            if (isDirectory) void loadDirectory(entry.path);
+            else if (entry.entryType === "file") void handleOpenFile(entry);
           }
         }}
         onContextMenu={(event) => {
@@ -753,6 +819,12 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
             event.stopPropagation();
           }}
         >
+          {selectedEntries.length === 1 && selectedEntries[0].entryType === "file" ? (
+            <button type="button" disabled={busy || state.status !== "ready"}
+              onClick={() => void handleOpenFile(selectedEntries[0])}>
+              打开
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={busy || state.status === "loading"}
@@ -766,7 +838,30 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
           >
             复制路径
           </button>
+          {selectedEntries.length === 1 && ["file", "directory"].includes(selectedEntries[0].entryType) ? (
+            <button type="button" disabled={busy || state.status !== "ready"}
+              onClick={() => {
+                setContextMenu(null);
+                setBusy(true);
+                setRenameEntry(selectedEntries[0]);
+              }}>
+              重命名
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="menu-danger"
+            disabled={busy || state.status !== "ready" || selectedEntries.length === 0}
+            onClick={() => void deleteSelection()}
+          >
+            删除{selectedEntries.length > 1 ? ` (${selectedEntries.length})` : ""}
+          </button>
         </div>
+      ) : null}
+
+      {renameEntry ? (
+        <RenameDialog entry={renameEntry} onRename={handleRename}
+          onClose={() => { setRenameEntry(null); setBusy(false); listRef.current?.focus(); }} />
       ) : null}
 
       {uploadMenu ? (

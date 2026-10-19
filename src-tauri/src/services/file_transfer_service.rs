@@ -1,3 +1,6 @@
+use super::opened_file::{
+    file_too_large, launch_default_application, open_temporary_file, MAX_OPEN_FILE_BYTES,
+};
 use crate::contracts::{
     AppErrorCode, AppErrorDto, CloseFileTransferSessionInput, DownloadRemotePathInput,
     ListRemoteDirectoryInput, ListRemoteDirectoryResult, OpenFileTransferSessionInput,
@@ -5,6 +8,7 @@ use crate::contracts::{
     TransferDirection, TransferProgress, TransferStatus, TransferTask,
     UploadRemoteDirectoryFilePayload, UploadRemoteDirectoryInput, UploadRemoteFileInput,
 };
+use crate::contracts::{DeleteRemotePathInput, OpenRemoteFileInput, RenameRemotePathInput};
 use crate::services::host_service::HostService;
 use crate::ssh::client::connect_ssh_session;
 use crate::ssh::host_key::HostKeyStore;
@@ -312,6 +316,140 @@ impl FileTransferService {
             entries: items,
             fallback_to_root,
         })
+    }
+
+    pub fn open_remote_file(
+        &self,
+        input: OpenRemoteFileInput,
+        cache: &Path,
+    ) -> Result<(), AppErrorDto> {
+        let session = self.get_session(&input.transfer_session_id)?;
+        let session = session.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => AppErrorDto::new(
+                AppErrorCode::IoError,
+                "当前会话正在传输或操作文件，请稍后重试打开",
+                true,
+            ),
+            std::sync::TryLockError::Poisoned(_) => file_transfer_sessions_lock_error(),
+        })?;
+        let path = Path::new(&input.path);
+        let stat = session.sftp.lstat(path).map_err(|error| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                "无法读取远端文件信息",
+                error.to_string(),
+                true,
+            )
+        })?;
+        validate_open_file_stat(&stat)?;
+        let name = input
+            .path
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| AppErrorDto::new(AppErrorCode::IoError, "文件名无效", false))?;
+        let mut source = session.sftp.open(path).map_err(|error| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                "无法读取远端文件",
+                error.to_string(),
+                true,
+            )
+        })?;
+        validate_open_file_stat(&source.stat().map_err(AppErrorDto::io)?)?;
+        open_temporary_file(cache, name, &mut source, launch_default_application)
+    }
+
+    pub fn rename_remote_path(&self, input: RenameRemotePathInput) -> Result<String, AppErrorDto> {
+        let target = remote_rename_target(&input.path, &input.new_name)?;
+        let session = self.get_session(&input.transfer_session_id)?;
+        let session = session.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => AppErrorDto::new(
+                AppErrorCode::IoError,
+                "当前会话正在传输或操作文件，请稍后重试重命名",
+                true,
+            ),
+            std::sync::TryLockError::Poisoned(_) => file_transfer_sessions_lock_error(),
+        })?;
+        let sftp = &session.sftp;
+        let stat = sftp.lstat(Path::new(&input.path)).map_err(|error| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                "无法读取待重命名条目",
+                error.to_string(),
+                true,
+            )
+        })?;
+        if !matches!(
+            stat.perm.map(|perm| perm & S_IFMT),
+            Some(S_IFDIR) | Some(0o100000)
+        ) {
+            return Err(AppErrorDto::new(
+                AppErrorCode::Unsupported,
+                "仅支持重命名普通文件和目录",
+                false,
+            ));
+        }
+        if input.path == target {
+            return Ok(target);
+        }
+        match sftp.lstat(Path::new(&target)) {
+            Ok(_) => {
+                return Err(AppErrorDto::new(
+                    AppErrorCode::IoError,
+                    "已存在同名条目，请使用其他名称",
+                    false,
+                ))
+            }
+            Err(error) if error.code() == ssh2::ErrorCode::SFTP(2) => {}
+            Err(error) => {
+                return Err(AppErrorDto::with_details(
+                    AppErrorCode::IoError,
+                    "无法检查目标名称，请稍后重试",
+                    error.to_string(),
+                    true,
+                ))
+            }
+        }
+        // None enables OVERWRITE and native rename extensions in ssh2; use SFTP no-clobber semantics.
+        sftp.rename(
+            Path::new(&input.path),
+            Path::new(&target),
+            Some(RenameFlags::empty()),
+        )
+        .map_err(|error| {
+            AppErrorDto::with_details(
+                AppErrorCode::IoError,
+                "重命名失败，请检查权限、原条目及目标名称是否已存在",
+                error.to_string(),
+                true,
+            )
+        })?;
+        Ok(target)
+    }
+
+    pub fn delete_remote_path(&self, input: DeleteRemotePathInput) -> Result<(), AppErrorDto> {
+        validate_delete_path(&input.path)?;
+        let session = self.get_session(&input.transfer_session_id)?;
+        let session = session.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => AppErrorDto::new(
+                AppErrorCode::IoError,
+                "当前会话正在传输或操作文件，请稍后重试删除",
+                true,
+            ),
+            std::sync::TryLockError::Poisoned(_) => file_transfer_sessions_lock_error(),
+        })?;
+        let mut plan = Vec::new();
+        collect_remote_delete_plan(&session.sftp, &input.path, 0, &mut plan)?;
+        for (path, directory) in plan {
+            let result = if directory {
+                session.sftp.rmdir(Path::new(&path))
+            } else {
+                session.sftp.unlink(Path::new(&path))
+            };
+            result.map_err(|error| remote_delete_error(&path, error))?;
+        }
+        Ok(())
     }
 
     pub fn enqueue_upload_remote_file(
@@ -1099,6 +1237,122 @@ fn remove_local_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+fn validate_open_file_stat(stat: &ssh2::FileStat) -> Result<(), AppErrorDto> {
+    if stat.perm.map(|perm| perm & S_IFMT) != Some(0o100000) {
+        return Err(AppErrorDto::new(
+            AppErrorCode::Unsupported,
+            "仅支持打开普通文件",
+            false,
+        ));
+    }
+    match stat.size {
+        Some(size) if size <= MAX_OPEN_FILE_BYTES => Ok(()),
+        Some(_) => Err(file_too_large()),
+        None => Err(AppErrorDto::new(
+            AppErrorCode::IoError,
+            "无法确认文件大小，不能打开",
+            true,
+        )),
+    }
+}
+
+fn remote_rename_target(path: &str, new_name: &str) -> Result<String, AppErrorDto> {
+    validate_delete_path(path)?;
+    if new_name.trim().is_empty()
+        || new_name.contains(['/', '\\', '\0'])
+        || matches!(new_name, "." | "..")
+    {
+        return Err(AppErrorDto::new(
+            AppErrorCode::IoError,
+            "名称不能为空、. 或 ..，也不能包含 /、\\ 或空字符",
+            false,
+        ));
+    }
+    let parent = remote_parent_path(path)
+        .ok_or_else(|| AppErrorDto::new(AppErrorCode::IoError, "待重命名路径无效", false))?;
+    Ok(join_remote_path(&parent, new_name))
+}
+
+fn validate_delete_path(path: &str) -> Result<(), AppErrorDto> {
+    if !path.starts_with('/')
+        || path.contains('\0')
+        || path[1..]
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(AppErrorDto::new(
+            AppErrorCode::IoError,
+            "删除路径无效，不能删除根目录或包含相对路径的条目",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+fn remote_delete_error(path: &str, error: ssh2::Error) -> AppErrorDto {
+    AppErrorDto::with_details(
+        AppErrorCode::IoError,
+        format!("无法删除远端条目 {path}，目录可能已部分删除"),
+        error.to_string(),
+        true,
+    )
+}
+
+// Inspect the entire tree before deleting; lstat keeps symlink targets outside the plan.
+fn collect_remote_delete_plan(
+    sftp: &ssh2::Sftp,
+    path: &str,
+    depth: usize,
+    plan: &mut Vec<(String, bool)>,
+) -> Result<(), AppErrorDto> {
+    if depth > MAX_DIRECTORY_DEPTH || plan.len() >= MAX_DIRECTORY_FILE_COUNT {
+        return Err(AppErrorDto::new(
+            AppErrorCode::IoError,
+            "删除目录超过限制（最多 1000 个条目、10 层子目录）",
+            false,
+        ));
+    }
+    let stat = sftp
+        .lstat(Path::new(path))
+        .map_err(|error| remote_delete_error(path, error))?;
+    let directory = match stat.perm {
+        Some(perm) => perm & S_IFMT == S_IFDIR,
+        None => {
+            return Err(AppErrorDto::new(
+                AppErrorCode::IoError,
+                "无法确认远端条目类型",
+                true,
+            ))
+        }
+    };
+    if directory {
+        for (entry_path, _) in sftp
+            .readdir(Path::new(path))
+            .map_err(|error| remote_delete_error(path, error))?
+        {
+            let name = entry_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    AppErrorDto::new(AppErrorCode::IoError, "远端文件名无法识别", false)
+                })?;
+            if name == "." || name == ".." {
+                continue;
+            }
+            collect_remote_delete_plan(sftp, &join_remote_path(path, name), depth + 1, plan)?;
+        }
+    }
+    if plan.len() >= MAX_DIRECTORY_FILE_COUNT {
+        return Err(AppErrorDto::new(
+            AppErrorCode::IoError,
+            "删除目录超过 1000 个条目限制",
+            false,
+        ));
+    }
+    plan.push((path.to_string(), directory));
+    Ok(())
+}
+
 fn remove_remote_tree(sftp: &ssh2::Sftp, path: &str, depth: usize) -> Result<(), AppErrorDto> {
     if depth > MAX_DIRECTORY_DEPTH + 1 {
         return Err(directory_limit_error());
@@ -1326,6 +1580,100 @@ fn transfer_tasks_lock_error() -> AppErrorDto {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rename_stays_in_parent_directory_and_preserves_names() {
+        for (path, name, target) in [
+            ("/old", "new", "/new"),
+            ("/home/user/old.txt", "报告.txt", "/home/user/报告.txt"),
+            ("/home/user/old", " spaced ", "/home/user/ spaced "),
+            ("/home/user/old", ".hidden", "/home/user/.hidden"),
+            ("/home/user/old", "old", "/home/user/old"),
+        ] {
+            assert_eq!(remote_rename_target(path, name).unwrap(), target);
+        }
+    }
+
+    #[test]
+    fn rename_rejects_root_traversal_and_invalid_names() {
+        for name in [
+            "",
+            " ",
+            ".",
+            "..",
+            "/tmp/file",
+            "../file",
+            "a/b",
+            "a\\b",
+            "a\0b",
+        ] {
+            assert!(
+                remote_rename_target("/home/file", name).is_err(),
+                "{name:?}"
+            );
+        }
+        for path in [
+            "/",
+            "",
+            "relative",
+            "/a/../file",
+            "/a/./file",
+            "/a//file",
+            "/a/",
+        ] {
+            assert!(remote_rename_target(path, "new").is_err(), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn opening_requires_a_regular_file_with_known_size_within_limit() {
+        let mut stat = ssh2::FileStat {
+            size: Some(MAX_OPEN_FILE_BYTES),
+            uid: None,
+            gid: None,
+            perm: Some(0o100644),
+            atime: None,
+            mtime: None,
+        };
+        assert!(validate_open_file_stat(&stat).is_ok());
+        stat.size = Some(0);
+        assert!(validate_open_file_stat(&stat).is_ok());
+        stat.size = Some(MAX_OPEN_FILE_BYTES + 1);
+        assert!(validate_open_file_stat(&stat)
+            .unwrap_err()
+            .message
+            .contains("文件太大"));
+        stat.size = None;
+        assert!(validate_open_file_stat(&stat).is_err());
+        stat.size = Some(1);
+        for perm in [
+            Some(S_IFDIR | 0o755),
+            Some(S_IFLNK | 0o777),
+            Some(0o010644),
+            None,
+        ] {
+            stat.perm = perm;
+            assert!(validate_open_file_stat(&stat).is_err());
+        }
+    }
+
+    #[test]
+    fn remote_delete_rejects_root_and_ambiguous_paths() {
+        for path in [
+            "", "/", "//", "relative", "/a/", "/a//b", "/a/../b", "/a/./b", "/a\0b",
+        ] {
+            assert!(super::validate_delete_path(path).is_err(), "{path:?}");
+        }
+        for path in [
+            "/file.txt",
+            "/home/user/a b",
+            "/home/user/文件",
+            "/a/..hidden",
+            "/trailing ",
+        ] {
+            assert!(super::validate_delete_path(path).is_ok(), "{path:?}");
+        }
+    }
+
     use super::*;
 
     fn test_task() -> TransferTask {

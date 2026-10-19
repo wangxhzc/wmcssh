@@ -2,6 +2,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import { lstat } from "@tauri-apps/plugin-fs";
 import type {
+  DeleteRemotePathInput,
+  OpenRemoteFileInput,
+  RenameRemotePathInput,
   DownloadRemotePathInput,
   ListRemoteDirectoryInput,
   ListRemoteDirectoryResult,
@@ -14,6 +17,30 @@ import type {
   UploadRemoteFileInput
 } from "../../types/fileTransfer";
 import { normalizeAppError } from "../../types/errors";
+
+export async function renameRemotePath(input: RenameRemotePathInput): Promise<string> {
+  try {
+    return await invoke<string>("ssh_rename_remote_path", { input });
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
+export async function openRemoteFile(input: OpenRemoteFileInput): Promise<void> {
+  try {
+    await invoke<void>("ssh_open_remote_file", { input });
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
+export async function deleteRemotePath(input: DeleteRemotePathInput): Promise<void> {
+  try {
+    await invoke<void>("ssh_delete_remote_path", { input });
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
 
 export function listenFileDrop(handler: (event: DragDropEvent) => void) {
   return getCurrentWebview().onDragDropEvent((event) => handler(event.payload));
