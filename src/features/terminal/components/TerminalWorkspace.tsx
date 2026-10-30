@@ -1,6 +1,7 @@
 import { TerminalPane } from "./TerminalPane";
 import { TerminalStatusBar } from "./TerminalStatusBar";
 import { TerminalTabBar } from "./TerminalTabBar";
+import { TerminalNotifications } from "./TerminalNotifications";
 
 export function TerminalWorkspace() {
   return (
@@ -8,6 +9,7 @@ export function TerminalWorkspace() {
       <TerminalTabBar />
       <TerminalPane />
       <TerminalStatusBar />
+      <TerminalNotifications />
     </div>
   );
 }

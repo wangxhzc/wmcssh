@@ -195,6 +195,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_primary_selection,
             write_primary_selection,
+            open_web_link,
             create_host,
             move_host,
             duplicate_host,

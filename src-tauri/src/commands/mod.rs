@@ -14,3 +14,5 @@ pub use vault_commands::*;
 
 pub mod clipboard_commands;
 pub use clipboard_commands::*;
+pub mod desktop_commands;
+pub use desktop_commands::*;

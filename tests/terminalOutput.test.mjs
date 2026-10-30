@@ -9,6 +9,7 @@ function fixture() {
   const callbacks = [];
   const resizes = [];
   class Terminal {
+    parser = { registerOscHandler() { return { dispose() {} }; } };
     options = {};
     cols = 80;
     rows = 24;
@@ -27,6 +28,7 @@ function fixture() {
     document: { hasFocus: () => false, visibilityState: "hidden", addEventListener() {} },
     require(name) {
       if (name === "@xterm/xterm") return { Terminal };
+      if (name === "@xterm/addon-web-links") return { WebLinksAddon: class {} };
       if (name === "@xterm/addon-fit") return { FitAddon: class {
         dimensions = { cols: 100, rows: 30 };
         proposeDimensions() { return this.dimensions; }
@@ -34,6 +36,9 @@ function fixture() {
       } };
       if (name.endsWith("types/settings")) return { defaultTerminalSettings: { letterSpacing: 0 } };
       if (name.endsWith("sshApi")) return { sshResize: async (size) => { resizes.push(size); } };
+      if (name.endsWith("clipboardApi")) return { writeText: async () => {} };
+      if (name.endsWith("remoteClipboard")) return { decodeRemoteClipboard: () => undefined };
+      if (name.endsWith("terminalIntegration")) return { installTerminalIntegration: () => ({ dispose() {} }), activateTerminalLink() {} };
       throw Error(name);
     }
   });

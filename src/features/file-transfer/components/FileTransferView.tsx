@@ -281,9 +281,10 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   useEffect(() => {
     if (!active) return;
     if (state.status === "idle") {
-      void loadDirectory();
+      const tab = useTerminalStore.getState().tabs.find((tab) => tab.tabId === tabId);
+      void loadDirectory(tab?.kind === "file-transfer" ? tab.initialPath : undefined);
     }
-  }, [active, loadDirectory, state.status]);
+  }, [active, loadDirectory, state.status, tabId]);
 
   useEffect(() => {
     completedUploadIds.split(",").forEach((id) => {

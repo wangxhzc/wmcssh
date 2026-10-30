@@ -1,10 +1,14 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { Channel } from "@tauri-apps/api/core";
 import type { TerminalSettingsDto } from "../../types/settings";
 import type { SshDataEvent } from "../../types/ssh";
 import { defaultTerminalSettings } from "../../types/settings";
 import { sshResize } from "../../services/tauri/sshApi";
+import { writeText } from "../../services/tauri/clipboardApi";
+import { decodeRemoteClipboard } from "./remoteClipboard";
+import { activateTerminalLink, installTerminalIntegration } from "./terminalIntegration";
 
 const DEFAULT_TERMINAL_THEME = {
   background: "#1C1C1C",
@@ -131,7 +135,16 @@ class TerminalRegistry {
     });
 
     const fitAddon = new FitAddon();
+    const linkOptions = {
+      activate: activateTerminalLink,
+      hover: (_event: MouseEvent, uri: string) => {
+        if (terminal.element) terminal.element.title = `Ctrl/Cmd+单击打开：${uri.slice(0, 2048)}`;
+      },
+      leave: () => { if (terminal.element) terminal.element.removeAttribute("title"); }
+    };
+    terminal.options.linkHandler = linkOptions;
     terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new WebLinksAddon(activateTerminalLink, linkOptions));
 
     const runtime: TerminalRuntime = {
       tabId,
@@ -142,6 +155,18 @@ class TerminalRegistry {
       mounted: false
     };
 
+    runtime.disposables.push(installTerminalIntegration(terminal, tabId));
+    runtime.disposables.push(terminal.parser.registerOscHandler(52, async (data) => {
+      const text = decodeRemoteClipboard(data);
+      if (text !== undefined) {
+        try {
+          await writeText(text);
+        } catch {
+          console.error("[wmcssh][terminal] remote clipboard write failed");
+        }
+      }
+      return true;
+    }));
     this.runtimes.set(tabId, runtime);
     this.flushPendingWrites(tabId);
     return runtime;

@@ -18,6 +18,8 @@ type WorkspaceTabBase = {
 
 export type TerminalTab = WorkspaceTabBase & {
   kind: "terminal";
+  remoteTitle?: string;
+  currentDirectory?: string;
   sessionId?: SessionId;
   status: TabStatus;
   errorMessage?: string;
@@ -27,6 +29,7 @@ export type TerminalTab = WorkspaceTabBase & {
 
 export type FileTransferTab = WorkspaceTabBase & {
   kind: "file-transfer";
+  initialPath?: string;
   transferSessionId?: SessionId;
 };
 
@@ -36,7 +39,8 @@ type TerminalStore = {
   tabs: WorkspaceTab[];
   activeTabId?: TabId;
   createTerminalTab: (input: { hostId: HostId; title: string }) => TabId;
-  createFileTransferTab: (input: { hostId: HostId; title: string }) => TabId;
+  createFileTransferTab: (input: { hostId: HostId; title: string; initialPath?: string }) => TabId;
+  setTerminalMetadata: (tabId: TabId, metadata: { remoteTitle?: string; currentDirectory?: string }) => void;
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
   bindFileTransferSession: (tabId: TabId, transferSessionId: SessionId) => void;
   replaceSession: (tabId: TabId, newSessionId: SessionId) => void;
@@ -81,6 +85,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const tabId = newTabId();
     const tab: FileTransferTab = {
       kind: "file-transfer",
+      initialPath: input.initialPath,
       tabId,
       hostId: input.hostId,
       title: `${input.title} 文件`,
@@ -96,10 +101,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     return tabId;
   },
 
+  setTerminalMetadata(tabId, metadata) {
+    set((state) => ({ tabs: state.tabs.map((tab) =>
+      tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, ...metadata } : tab
+    ) }));
+  },
+
   bindSession(tabId, sessionId) {
     set((state) => ({
       tabs: state.tabs.map((tab) =>
-        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, sessionId } : tab
+        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, sessionId, remoteTitle: undefined, currentDirectory: undefined } : tab
       )
     }));
   },

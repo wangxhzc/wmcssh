@@ -68,6 +68,54 @@ body,
   box-sizing: border-box;
 }
 
+.terminal-notifications {
+  position: fixed;
+  right: 16px;
+  bottom: 32px;
+  z-index: 120;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.terminal-notification {
+  display: flex;
+  align-items: flex-start;
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  pointer-events: auto;
+}
+
+.terminal-notification-content {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 10px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.terminal-notification-source { color: var(--muted); }
+.terminal-notification-close {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+
+
 * {
   scrollbar-color: var(--muted) var(--panel-bg);
   scrollbar-width: thin;

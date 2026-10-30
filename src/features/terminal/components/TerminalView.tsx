@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { readText, writeText, readPrimarySelection, writePrimarySelection } from "../../../services/tauri/clipboardApi";
 import { terminalClipboardShortcut } from "../clipboardShortcuts";
+import { installMouseWheelNormalizer } from "../mouseWheelNormalizer";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { loadTerminalFonts } from "../terminalFonts";
 import { terminalRegistry } from "../terminalRegistry";
@@ -66,6 +67,7 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
     console.debug("[wmcssh][terminal] mounted", { tabId });
 
     const element = containerRef.current;
+    runtime.disposables.push(installMouseWheelNormalizer(element, runtime.terminal));
     const isLinux = /linux/i.test(navigator.platform) || /linux/i.test(navigator.userAgent);
 
     // WebKitGTK may dispatch `insertText` events for every IME pre-edit update.
