@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { readText, writeText, readPrimarySelection, writePrimarySelection } from "../../../services/tauri/clipboardApi";
 import { terminalClipboardShortcut } from "../clipboardShortcuts";
+import { installSelectionMouseGuard } from "../selectionMouseGuard";
 import { installMouseWheelNormalizer } from "../mouseWheelNormalizer";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { loadTerminalFonts } from "../terminalFonts";
@@ -67,6 +68,7 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
     console.debug("[wmcssh][terminal] mounted", { tabId });
 
     const element = containerRef.current;
+    runtime.disposables.push(installSelectionMouseGuard(element, runtime.terminal));
     runtime.disposables.push(installMouseWheelNormalizer(element, runtime.terminal));
     const isLinux = /linux/i.test(navigator.platform) || /linux/i.test(navigator.userAgent);
 

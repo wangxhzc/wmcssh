@@ -115,7 +115,6 @@ body,
   color: inherit;
 }
 
-
 * {
   scrollbar-color: var(--muted) var(--panel-bg);
   scrollbar-width: thin;
@@ -1629,6 +1628,24 @@ textarea::placeholder {
 .tab-item.active .tab-activate {
   font-weight: 700;
 }
+
+.tab-item { user-select: none; touch-action: none; }
+.tab-reordering .tab-item,
+.tab-reordering .tab-item * { cursor: grabbing; }
+.tab-item.dragging { opacity: 0.45; }
+.tab-item.drop-before::after,
+.tab-item.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.tab-item.drop-before::after { left: 0; }
+.tab-item.drop-after::after { right: 0; }
 
 .tab-list-button {
   flex: 0 0 30px;

@@ -110,42 +110,38 @@ impl HostService {
 
         self.validate_host_input(&name, &hostname, &username, port, &auth_type)?;
 
-        let mut secrets_to_delete = Vec::new();
-        let password_ref = match input.password {
-            Some(SecretUpdate::Keep) => current.password_ref.clone(),
-            Some(SecretUpdate::Replace(value)) => {
-                let key = host_password_ref(host_id);
-                self.set_secret(&key, &value).await?;
-                Some(key)
-            }
-            Some(SecretUpdate::Clear) => {
-                if let Some(key) = current.password_ref.clone() {
-                    secrets_to_delete.push(key);
-                }
-                None
-            }
-            None => current.password_ref.clone(),
-        };
-
-        let passphrase_ref = match input.private_key_passphrase {
-            Some(SecretUpdate::Keep) => current.passphrase_ref.clone(),
-            Some(SecretUpdate::Replace(value)) => {
-                let key = host_passphrase_ref(host_id);
-                self.set_secret(&key, &value).await?;
-                Some(key)
-            }
-            Some(SecretUpdate::Clear) => {
-                if let Some(key) = current.passphrase_ref.clone() {
-                    secrets_to_delete.push(key);
-                }
-                None
-            }
-            None => current.passphrase_ref.clone(),
-        };
-
-        for key in secrets_to_delete {
-            let _ = self.secret_store.delete_secret(&key).await;
+        // New references keep the original credentials usable until the host transaction commits.
+        let mut new_secrets = Vec::new();
+        let mut old_secrets = Vec::new();
+        let prepared = async {
+            let password_ref = self
+                .prepare_secret_update(
+                    &host_password_ref(host_id),
+                    current.password_ref.clone(),
+                    input.password,
+                    &mut new_secrets,
+                    &mut old_secrets,
+                )
+                .await?;
+            let passphrase_ref = self
+                .prepare_secret_update(
+                    &host_passphrase_ref(host_id),
+                    current.passphrase_ref.clone(),
+                    input.private_key_passphrase,
+                    &mut new_secrets,
+                    &mut old_secrets,
+                )
+                .await?;
+            Ok::<_, AppErrorDto>((password_ref, passphrase_ref))
         }
+        .await;
+        let (password_ref, passphrase_ref) = match prepared {
+            Ok(refs) => refs,
+            Err(error) => {
+                self.delete_secrets(&new_secrets).await;
+                return Err(error);
+            }
+        };
 
         let private_key_path = input.private_key_path.or(current.private_key_path);
         let updated = self
@@ -169,9 +165,52 @@ impl HostService {
                 keepalive_interval_secs,
                 updated_at: now_millis(),
             })
-            .await?;
+            .await;
+        let updated = match updated {
+            Ok(record) => record,
+            Err(error) => {
+                self.delete_secrets(&new_secrets).await;
+                return Err(error);
+            }
+        };
+        self.delete_secrets(&old_secrets).await;
 
         self.host_repo.to_host_dto(updated).await
+    }
+
+    async fn prepare_secret_update(
+        &self,
+        base_ref: &str,
+        current_ref: Option<String>,
+        update: Option<SecretUpdate>,
+        new_secrets: &mut Vec<String>,
+        old_secrets: &mut Vec<String>,
+    ) -> Result<Option<String>, AppErrorDto> {
+        let replacement = match update {
+            None | Some(SecretUpdate::Keep) => return Ok(current_ref),
+            Some(SecretUpdate::Clear) => None,
+            Some(SecretUpdate::Replace(value)) => {
+                let key = format!("{base_ref}:{}", new_id());
+                self.set_secret(&key, &value).await?;
+                new_secrets.push(key.clone());
+                Some(key)
+            }
+        };
+        if let Some(key) = current_ref {
+            old_secrets.push(key);
+        }
+        Ok(replacement)
+    }
+
+    async fn delete_secrets(&self, keys: &[String]) {
+        for key in keys {
+            if let Err(error) = self.secret_store.delete_secret(key).await {
+                crate::app_log!(
+                    "[host-service] credential cleanup failed code={:?}",
+                    error.code
+                );
+            }
+        }
     }
 
     pub async fn duplicate_host(&self, input: DuplicateHostInput) -> Result<HostDto, AppErrorDto> {
@@ -463,5 +502,123 @@ fn parse_auth_type(value: &str) -> Result<AuthType, AppErrorDto> {
             "Invalid auth type",
             false,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrets::secret_store::SecretStore;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct TestSecrets {
+        values: Mutex<HashMap<String, String>>,
+        fail_passphrase: Mutex<bool>,
+    }
+
+    #[async_trait::async_trait]
+    impl SecretStore for TestSecrets {
+        async fn set_secret(&self, key: &str, value: &str) -> Result<(), AppErrorDto> {
+            if *self.fail_passphrase.lock().unwrap() && key.contains("private_key_passphrase") {
+                return Err(AppErrorDto::new(
+                    AppErrorCode::SecretStoreError,
+                    "Injected failure",
+                    false,
+                ));
+            }
+            self.values.lock().unwrap().insert(key.into(), value.into());
+            Ok(())
+        }
+
+        async fn get_secret(&self, key: &str) -> Result<String, AppErrorDto> {
+            self.values
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .ok_or_else(|| {
+                    AppErrorDto::new(AppErrorCode::SecretNotFound, "Missing secret", false)
+                })
+        }
+
+        async fn delete_secret(&self, key: &str) -> Result<(), AppErrorDto> {
+            self.values.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    async fn fixture() -> (HostService, Arc<TestSecrets>, String) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::db::migrations::run_migrations(&pool).await.unwrap();
+        let secrets = Arc::new(TestSecrets::default());
+        let service = HostService::new(Arc::new(HostRepository::new(pool)), secrets.clone());
+        let host = service
+            .create_host(
+                serde_json::from_value(serde_json::json!({
+                    "name": "test", "hostname": "example.test", "port": 22,
+                    "username": "root", "authType": "password", "password": "old",
+                    "privateKeyPassphrase": "old-passphrase"
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        (service, secrets, host.id)
+    }
+
+    #[tokio::test]
+    async fn failed_host_update_preserves_credentials_and_removes_staged_secrets() {
+        for action in [
+            serde_json::json!({"action": "replace", "value": "new"}),
+            serde_json::json!({"action": "clear"}),
+        ] {
+            let (service, secrets, id) = fixture().await;
+            let before = secrets.values.lock().unwrap().clone();
+            let input = serde_json::from_value(serde_json::json!({
+                "password": action, "groupId": "missing-group"
+            }))
+            .unwrap();
+            assert!(service.update_host(&id, input).await.is_err());
+            assert_eq!(*secrets.values.lock().unwrap(), before);
+            let config = service.build_connect_config(&id, 80, 24).await.unwrap();
+            assert!(matches!(config.auth, AuthConfig::Password { password } if password == "old"));
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_second_secret_write_cleans_up_first_without_changing_originals() {
+        let (service, secrets, id) = fixture().await;
+        let before = secrets.values.lock().unwrap().clone();
+        *secrets.fail_passphrase.lock().unwrap() = true;
+        let input = serde_json::from_value(serde_json::json!({
+            "password": {"action": "replace", "value": "new"},
+            "privateKeyPassphrase": {"action": "replace", "value": "new-passphrase"}
+        }))
+        .unwrap();
+        assert!(service.update_host(&id, input).await.is_err());
+        assert_eq!(*secrets.values.lock().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn committed_update_replaces_references_and_removes_old_credentials() {
+        let (service, secrets, id) = fixture().await;
+        let input = serde_json::from_value(serde_json::json!({
+            "password": {"action": "replace", "value": "new"},
+            "privateKeyPassphrase": {"action": "clear"}
+        }))
+        .unwrap();
+        service.update_host(&id, input).await.unwrap();
+        let config = service.build_connect_config(&id, 80, 24).await.unwrap();
+        assert!(matches!(config.auth, AuthConfig::Password { password } if password == "new"));
+        let values = secrets.values.lock().unwrap();
+        assert_eq!(values.len(), 1);
+        assert!(!values.contains_key(&host_password_ref(&id)));
+        assert!(!values.contains_key(&host_passphrase_ref(&id)));
     }
 }

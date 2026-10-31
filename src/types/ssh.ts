@@ -11,6 +11,7 @@ export type SessionStatus =
   | "error";
 
 export type SshConnectInput = {
+  sessionId?: SessionId;
   hostId: HostId;
   initialCols: number;
   initialRows: number;

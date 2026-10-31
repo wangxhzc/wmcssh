@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import type { HostDto } from "../../types/host";
-import type { SshDataEvent } from "../../types/ssh";
+import type { SshConnectInput, SshDataEvent } from "../../types/ssh";
 import { normalizeAppError } from "../../types/errors";
 import { closeFileTransferSession } from "../../services/tauri/fileTransferApi";
 import { sshConnect, sshDisconnect } from "../../services/tauri/sshApi";
@@ -75,8 +75,12 @@ export async function flushTerminalInput(tabId: string) {
   const buffered = pendingInputByTab.get(tabId);
   if (!buffered) return;
 
-  const chunk = buffered.slice(0, MAX_INPUT_FLUSH_CHARS);
-  const remaining = buffered.slice(MAX_INPUT_FLUSH_CHARS);
+  let end = MAX_INPUT_FLUSH_CHARS;
+  const last = buffered.charCodeAt(end - 1);
+  const next = buffered.charCodeAt(end);
+  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end -= 1;
+  const chunk = buffered.slice(0, end);
+  const remaining = buffered.slice(end);
   if (remaining) {
     pendingInputByTab.set(tabId, remaining);
   } else {
@@ -233,7 +237,27 @@ function createTerminalDataChannel(tabId: string) {
   return channel;
 }
 
-export async function connectHost(host: HostDto, suppliedCredentials?: ConnectionCredentials) {
+async function connectTerminalSession(tabId: string, input: SshConnectInput) {
+  if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) return;
+  const sessionId = crypto.randomUUID();
+  const onData = createTerminalDataChannel(tabId);
+  const store = useTerminalStore.getState();
+  store.bindSession(tabId, sessionId);
+  sessionTabIndex.bind(sessionId, tabId);
+  terminalRegistry.bindSession(tabId, sessionId);
+  await sshConnect({ ...input, sessionId }, onData);
+  const tab = useTerminalStore.getState().tabs.find((tab) => tab.tabId === tabId);
+  if (!tab) {
+    await sshDisconnect({ sessionId });
+  } else if (tab.kind === "terminal" && tab.sessionId === sessionId) {
+    // An early resize may have run before Rust registered the connection.
+    const runtime = terminalRegistry.get(tabId);
+    if (runtime) runtime.lastResize = undefined;
+    terminalRegistry.fitAndResize(tabId);
+  }
+}
+
+export async function connectHost(host: HostDto, suppliedCredentials?: ConnectionCredentials, afterTabId?: string) {
   const credentials = suppliedCredentials ?? await requestConnectionCredentials(host);
   if (!credentials) return;
   if (!suppliedCredentials) {
@@ -241,28 +265,14 @@ export async function connectHost(host: HostDto, suppliedCredentials?: Connectio
   }
 
   const store = useTerminalStore.getState();
-  const tabId = store.createTerminalTab({ hostId: host.id, title: host.name });
+  const tabId = store.createTerminalTab({ hostId: host.id, title: host.name, afterTabId });
 
   store.setActiveTab(tabId);
   store.setTabStatus(tabId, "connecting");
   resumeTerminalInput(tabId);
 
-  const onData = createTerminalDataChannel(tabId);
-
   try {
-    const { sessionId } = await sshConnect(
-      connectInput(host.id, credentials),
-      onData
-    );
-
-    if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
-      await sshDisconnect({ sessionId });
-      return;
-    }
-
-    store.bindSession(tabId, sessionId);
-    sessionTabIndex.bind(sessionId, tabId);
-    terminalRegistry.bindSession(tabId, sessionId);
+    await connectTerminalSession(tabId, connectInput(host.id, credentials));
   } catch (error) {
     const appError = normalizeAppError(error);
     store.setTabStatus(tabId, "error", appError.message, appError.code);
@@ -284,6 +294,7 @@ export async function retryAuthentication(tabId: string, message: string) {
     message: `认证失败：${message}。请重新输入用户名或认证凭据。`
   });
   if (!credentials) return;
+  if (!useTerminalStore.getState().tabs.some((item) => item.tabId === tabId)) return;
   await rememberConnectionCredentials(host, credentials);
 
   if (tab.sessionId) {
@@ -292,17 +303,8 @@ export async function retryAuthentication(tabId: string, message: string) {
   }
   store.setTabStatus(tabId, "reconnecting");
   resumeTerminalInput(tabId);
-  const onData = createTerminalDataChannel(tabId);
-
   try {
-    const { sessionId } = await sshConnect(connectInput(host.id, credentials), onData);
-    if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
-      await sshDisconnect({ sessionId });
-      return;
-    }
-    store.replaceSession(tabId, sessionId);
-    sessionTabIndex.bind(sessionId, tabId);
-    terminalRegistry.bindSession(tabId, sessionId);
+    await connectTerminalSession(tabId, connectInput(host.id, credentials));
   } catch (error) {
     const appError = normalizeAppError(error);
     store.setTabStatus(tabId, "error", appError.message, appError.code);
@@ -351,23 +353,11 @@ export async function reconnectTab(tabId: string) {
     sessionTabIndex.unbind(oldSessionId);
   }
 
-  const onData = createTerminalDataChannel(tabId);
-
   try {
-    const { sessionId: newSessionId } = await sshConnect(
-      { hostId: tab.hostId, initialCols: DEFAULT_TERMINAL_COLS, initialRows: DEFAULT_TERMINAL_ROWS },
-      onData
-    );
-
-    if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
-      await sshDisconnect({ sessionId: newSessionId });
-      return;
-    }
-
-    store.replaceSession(tabId, newSessionId);
-    sessionTabIndex.replace(oldSessionId, newSessionId, tabId);
-    terminalRegistry.bindSession(tabId, newSessionId);
     resumeTerminalInput(tabId);
+    await connectTerminalSession(tabId, {
+      hostId: tab.hostId, initialCols: DEFAULT_TERMINAL_COLS, initialRows: DEFAULT_TERMINAL_ROWS
+    });
   } catch (error) {
     const appError = normalizeAppError(error);
     store.setTabStatus(tabId, "error", appError.message, appError.code);

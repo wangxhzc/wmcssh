@@ -1,12 +1,14 @@
 import { TerminalTabTitle } from "./TerminalTabTitle";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useHostStore } from "../../../stores/hostStore";
+import { getHost } from "../../../services/tauri/hostApi";
+import type { HostDto } from "../../../types/host";
 import { openFileTransferTab } from "../../file-transfer/actions";
 import { connectHost, closeWorkspaceTab } from "../actions";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
 import { sessionStatusLabel } from "../sessionStatusLabel";
 import type { SessionStatus } from "../../../types/ssh";
+import { useTabReorder } from "../useTabReorder";
 
 type TabMenuState = {
   tabId: string;
@@ -18,7 +20,8 @@ export function TerminalTabBar() {
   const tabs = useTerminalStore((state) => state.tabs);
   const activeTabId = useTerminalStore((state) => state.activeTabId);
   const setActiveTab = useTerminalStore((state) => state.setActiveTab);
-  const hosts = useHostStore((state) => state.hosts);
+  const [menuHost, setMenuHost] = useState<HostDto>();
+  const [menuHostError, setMenuHostError] = useState<string>();
   const [tabMenu, setTabMenu] = useState<TabMenuState>(null);
   const [tabListOpen, setTabListOpen] = useState(false);
   const [tabsOverflow, setTabsOverflow] = useState(false);
@@ -33,8 +36,24 @@ export function TerminalTabBar() {
     return { x: rect.right - 220, y: rect.bottom };
   }, [tabListOpen]);
   const tabListPosition = useAnchoredMenuPosition(tabListAnchor, tabListMenuRef);
+  const reorder = useTabReorder(tabStripRef, (tabId, targetTabId, after) => {
+    useTerminalStore.getState().moveTab(tabId, targetTabId, after);
+  });
 
   const closeTabMenu = () => setTabMenu(null);
+
+  useEffect(() => {
+    if (!tabMenu) return;
+    const tab = useTerminalStore.getState().tabs.find((item) => item.tabId === tabMenu.tabId);
+    if (!tab) return;
+    let cancelled = false;
+    void getHost(tab.hostId).then((host) => {
+      if (!cancelled) setMenuHost(host);
+    }).catch((error) => {
+      if (!cancelled) setMenuHostError(`读取主机失败：${error instanceof Error ? error.message : String(error)}`);
+    });
+    return () => { cancelled = true; };
+  }, [tabMenu]);
 
   useEffect(() => {
     const closeShortcut = (event: KeyboardEvent) => {
@@ -115,7 +134,6 @@ export function TerminalTabBar() {
   };
 
   const menuTab = tabMenu ? tabs.find((tab) => tab.tabId === tabMenu.tabId) : undefined;
-  const menuHost = menuTab ? hosts.find((host) => host.id === menuTab.hostId) : undefined;
 
   const closeOtherTabs = async (tabId: string) => {
     const closingTabs = useTerminalStore
@@ -135,17 +153,26 @@ export function TerminalTabBar() {
   };
 
   return (
-    <div className="tab-bar">
+    <div className={`tab-bar${reorder.draggedId ? " tab-reordering" : ""}`}>
       <div ref={tabStripRef} className="tab-strip">
         {tabs.map((tab) => (
           <div
             key={tab.tabId}
             data-tab-id={tab.tabId}
-            className={tab.tabId === activeTabId ? "tab-item active" : "tab-item"}
+            className={`tab-item${tab.tabId === activeTabId ? " active" : ""}${reorder.draggedId === tab.tabId ? " dragging" : ""}${reorder.destination?.targetTabId === tab.tabId ? (reorder.destination.after ? " drop-after" : " drop-before") : ""}`}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              closeTabMenu();
+              setTabListOpen(false);
+              reorder.start(event, tab.tabId);
+            }}
+            onDragStart={(event) => event.preventDefault()}
             onContextMenu={(event) => {
               event.preventDefault();
               event.stopPropagation();
               setActiveTab(tab.tabId);
+              setMenuHost(undefined);
+              setMenuHostError(undefined);
               setTabMenu({
                 tabId: tab.tabId,
                 x: event.clientX,
@@ -154,7 +181,7 @@ export function TerminalTabBar() {
             }}
             title={tab.kind === "terminal" ? tab.errorMessage ?? `${tab.title}${tab.remoteTitle ? ` · ${tab.remoteTitle}` : ""} ${sessionStatusLabel[tab.status]}${tab.currentDirectory ? `\n${tab.currentDirectory}` : ""}` : tab.title}
           >
-            <button type="button" className="tab-activate" aria-pressed={tab.tabId === activeTabId} onClick={() => activateTab(tab.tabId)}>
+            <button type="button" className="tab-activate" aria-pressed={tab.tabId === activeTabId} onClick={() => { if (!reorder.suppressClick()) activateTab(tab.tabId); }}>
               <TerminalTabTitle title={tab.kind === "terminal" && tab.remoteTitle ? `${tab.title} · ${tab.remoteTitle}` : tab.title} active={tab.tabId === activeTabId} />{tab.kind === "terminal" ? renderStatus(tab.status) : null}
             </button>
             <button
@@ -164,6 +191,7 @@ export function TerminalTabBar() {
               title="关闭标签（Ctrl/Cmd+Shift+W）"
               onClick={(event) => {
                 event.stopPropagation();
+                if (reorder.suppressClick()) return;
                 void closeWorkspaceTab(tab.tabId);
               }}
             >
@@ -219,16 +247,17 @@ export function TerminalTabBar() {
             event.stopPropagation();
           }}
         >
+          {menuHostError ? <p role="alert">{menuHostError}</p> : null}
           <button
             type="button"
             disabled={!menuHost}
             onClick={async () => {
               closeTabMenu();
               if (!menuHost) return;
-              await connectHost(menuHost);
+              await connectHost(menuHost, undefined, tabMenu.tabId);
             }}
           >
-            复制
+            复制连接
           </button>
           <button
             type="button"

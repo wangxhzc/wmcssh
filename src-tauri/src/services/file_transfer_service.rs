@@ -223,6 +223,7 @@ impl FileTransferService {
         let config = self
             .host_service
             .build_connect_config_with_credentials(SshConnectInput {
+                session_id: None,
                 host_id: input.host_id,
                 initial_cols: 0,
                 initial_rows: 0,
@@ -257,6 +258,13 @@ impl FileTransferService {
         Ok(OpenFileTransferSessionResult {
             transfer_session_id,
         })
+    }
+
+    pub fn active_session_count(&self) -> Result<usize, AppErrorDto> {
+        self.sessions
+            .lock()
+            .map(|sessions| sessions.len())
+            .map_err(|_| file_transfer_sessions_lock_error())
     }
 
     pub async fn close_file_transfer_session(

@@ -29,8 +29,14 @@ export function useTerminalEvents() {
 
   useEffect(() => {
     const disposers: Array<() => void> = [];
+    let disposed = false;
+    const registerDisposer = (dispose: () => void) => {
+      if (disposed) dispose();
+      else disposers.push(dispose);
+    };
 
     void listenSshStatus((payload) => {
+      if (disposed) return;
       const tab = useTerminalStore.getState().findTabBySessionId(payload.sessionId);
       if (!tab) return;
 
@@ -41,9 +47,10 @@ export function useTerminalEvents() {
         // so their protocol messages must not become user-facing error banners.
         setTabStatus(tab.tabId, payload.status);
       }
-    }).then((dispose) => disposers.push(dispose));
+    }).then(registerDisposer);
 
     void listenSshClosed((payload) => {
+      if (disposed) return;
       const tab = useTerminalStore.getState().findTabBySessionId(payload.sessionId);
       if (!tab) return;
 
@@ -53,9 +60,10 @@ export function useTerminalEvents() {
       if (payload.reason === "worker_error" && tab.status === "error" && tab.errorCode) return;
       const message = payload.message ?? (payload.reason === "remote_closed" ? "远程主机已关闭连接" : "SSH 连接已断开");
       setTabStatus(tab.tabId, "disconnected", message, payload.reason === "network_error" ? "network_unreachable" : "session_closed");
-    }).then((dispose) => disposers.push(dispose));
+    }).then(registerDisposer);
 
     void listenSshError((payload) => {
+      if (disposed) return;
       const tab = useTerminalStore.getState().findTabBySessionId(payload.sessionId);
       if (!tab) return;
 
@@ -67,9 +75,10 @@ export function useTerminalEvents() {
       } else if (payload.error.code === "host_invalid" && /username|private key|password/i.test(payload.error.message)) {
         void retryAuthentication(tab.tabId, message);
       }
-    }).then((dispose) => disposers.push(dispose));
+    }).then(registerDisposer);
 
     return () => {
+      disposed = true;
       disposers.forEach((dispose) => dispose());
     };
   }, [setTabStatus]);

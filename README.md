@@ -126,13 +126,26 @@ Linux amd64：
 npm run build:linux:amd64
 ```
 
-Windows amd64：
+Windows amd64（本地与 CI 均使用 GNU）：
+
+在 Windows 上先安装 Rust GNU 工具链，以及 MSYS2 MINGW64 的 GCC：
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-gnu
+```
+
+在 MSYS2 MINGW64 终端执行 `pacman -S --needed mingw-w64-x86_64-gcc`，
+并将 MSYS2 安装目录下的 `mingw64\bin` 加入运行 npm 的终端 `PATH`。
+例如默认安装位置为 `C:\msys64\mingw64\bin`。然后执行：
 
 ```bash
 npm run build:windows:amd64
 ```
 
 Windows 构建仅生成 NSIS 安装程序（`*-setup.exe`），不生成 MSI。
+发布工作流同样使用 `stable-x86_64-pc-windows-gnu` 和 MinGW-w64 GCC，
+目标统一为 `x86_64-pc-windows-gnu`。Linux 上交叉编译使用下方 Tauri 原命令，
+不使用包含 Windows `set` 语法的 npm 脚本。
 
 也可以直接使用 Tauri 原命令：
 

@@ -18,12 +18,18 @@ jobs:
         include:
           - name: Linux amd64 (deb)
             platform: ubuntu-22.04
+            toolchain: stable-x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-gnu
             args: --target x86_64-unknown-linux-gnu --bundles deb
           - name: Windows amd64 (NSIS)
             platform: windows-latest
-            args: --target x86_64-pc-windows-msvc --bundles nsis
+            toolchain: stable-x86_64-pc-windows-gnu
+            target: x86_64-pc-windows-gnu
+            args: --target x86_64-pc-windows-gnu --bundles nsis
 
     runs-on: ${{ matrix.platform }}
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -35,9 +41,24 @@ jobs:
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          targets: ${{ matrix.platform == 'windows-latest' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Windows GNU build dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+
+      - name: Add MinGW-w64 to the Windows build PATH
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cygpath -m /mingw64/bin >> "$GITHUB_PATH"
+          gcc --version
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'

@@ -210,9 +210,12 @@ impl HostRepository {
 
         self.replace_host_tags(&mut tx, &input.id, &input.tag_ids)
             .await?;
+        let record = sqlx::query_as::<_, HostRecord>("SELECT * FROM hosts WHERE id = ?")
+            .bind(&input.id)
+            .fetch_one(&mut *tx)
+            .await?;
         tx.commit().await?;
-
-        self.get_host(&input.id).await
+        Ok(record)
     }
 
     pub async fn get_host(&self, host_id: &str) -> Result<HostRecord, AppErrorDto> {

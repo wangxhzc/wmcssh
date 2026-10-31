@@ -38,14 +38,15 @@ export type WorkspaceTab = TerminalTab | FileTransferTab;
 type TerminalStore = {
   tabs: WorkspaceTab[];
   activeTabId?: TabId;
-  createTerminalTab: (input: { hostId: HostId; title: string }) => TabId;
-  createFileTransferTab: (input: { hostId: HostId; title: string; initialPath?: string }) => TabId;
+  createTerminalTab: (input: { hostId: HostId; title: string; afterTabId?: TabId }) => TabId;
+  createFileTransferTab: (input: { hostId: HostId; title: string; afterTabId?: TabId; initialPath?: string }) => TabId;
   setTerminalMetadata: (tabId: TabId, metadata: { remoteTitle?: string; currentDirectory?: string }) => void;
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
   bindFileTransferSession: (tabId: TabId, transferSessionId: SessionId) => void;
   replaceSession: (tabId: TabId, newSessionId: SessionId) => void;
   setTabStatus: (tabId: TabId, status: TabStatus, errorMessage?: string, errorCode?: AppErrorCode, errorDetails?: string) => void;
   setActiveTab: (tabId: TabId) => void;
+  moveTab: (tabId: TabId, targetTabId: TabId, after: boolean) => void;
   markClosing: (tabId: TabId) => void;
   removeTab: (tabId: TabId) => void;
   findTabBySessionId: (sessionId: SessionId) => TerminalTab | undefined;
@@ -53,6 +54,12 @@ type TerminalStore = {
 
 function newTabId() {
   return crypto.randomUUID();
+}
+
+function insertTab(tabs: WorkspaceTab[], tab: WorkspaceTab, afterTabId?: TabId) {
+  const index = afterTabId ? tabs.findIndex((item) => item.tabId === afterTabId) : -1;
+  if (index < 0) return [...tabs, tab];
+  return [...tabs.slice(0, index + 1), tab, ...tabs.slice(index + 1)];
 }
 
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
@@ -73,7 +80,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     };
 
     set((state) => ({
-      tabs: [...state.tabs, tab],
+      tabs: insertTab(state.tabs, tab, input.afterTabId),
       activeTabId: tabId
     }));
 
@@ -94,7 +101,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     };
 
     set((state) => ({
-      tabs: [...state.tabs, tab],
+      tabs: insertTab(state.tabs, tab, input.afterTabId),
       activeTabId: tabId
     }));
 
@@ -142,6 +149,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         tab.tabId === tabId ? { ...tab, lastActiveAt: Date.now() } : tab
       )
     }));
+  },
+
+  moveTab(tabId, targetTabId, after) {
+    set((state) => {
+      if (tabId === targetTabId) return state;
+      const moving = state.tabs.find((tab) => tab.tabId === tabId);
+      if (!moving || !state.tabs.some((tab) => tab.tabId === targetTabId)) return state;
+      const tabs = state.tabs.filter((tab) => tab.tabId !== tabId);
+      const index = tabs.findIndex((tab) => tab.tabId === targetTabId) + (after ? 1 : 0);
+      tabs.splice(index, 0, moving);
+      return { tabs };
+    });
   },
 
   markClosing(tabId) {

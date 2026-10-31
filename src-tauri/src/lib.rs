@@ -1,4 +1,5 @@
 mod app_state;
+mod close_confirmation;
 mod commands;
 mod contracts;
 mod db;
@@ -167,28 +168,64 @@ pub fn run() {
                 save_window_size(window, size);
             }
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window
+                    .state::<CloseConfirmation>()
+                    .0
+                    .load(Ordering::Relaxed)
+                {
+                    api.prevent_close();
+                    return;
+                }
                 let state = window.state::<AppState>();
-                let active = state.file_transfer_service.list_transfer_tasks().map(|tasks| {
-                    tasks.iter().filter(|task| matches!(task.status,
-                        contracts::TransferStatus::Queued | contracts::TransferStatus::Running)).count()
-                });
-                if matches!(active, Ok(0)) { return; }
-                api.prevent_close();
-                if window.state::<CloseConfirmation>().0.swap(true, Ordering::Relaxed) { return; }
-                let message = match active {
-                    Ok(count) => format!("还有 {count} 个文件传输任务未完成。退出会中断传输，重新启动后不会恢复。确定退出吗？"),
-                    Err(_) => "无法确认文件传输状态，退出可能中断未完成的任务。确定退出吗？".to_string(),
+                let active = state
+                    .file_transfer_service
+                    .list_transfer_tasks()
+                    .map(|tasks| {
+                        tasks
+                            .iter()
+                            .filter(|task| {
+                                matches!(
+                                    task.status,
+                                    contracts::TransferStatus::Queued
+                                        | contracts::TransferStatus::Running
+                                )
+                            })
+                            .count()
+                    });
+                let Some(message) = close_confirmation::exit_confirmation_message(
+                    state.session_manager.active_session_count(),
+                    state.file_transfer_service.active_session_count().ok(),
+                    active.ok(),
+                ) else {
+                    return;
                 };
+                api.prevent_close();
+                if window
+                    .state::<CloseConfirmation>()
+                    .0
+                    .swap(true, Ordering::Relaxed)
+                {
+                    return;
+                }
                 let closing_window = window.clone();
-                window.dialog().message(message).title("退出 wmcssh")
+                window
+                    .dialog()
+                    .message(message)
+                    .title("退出 wmcssh")
                     .kind(MessageDialogKind::Warning)
-                    .buttons(MessageDialogButtons::OkCancelCustom("退出并中断传输".into(), "继续传输".into()))
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "退出程序".into(),
+                        "取消".into(),
+                    ))
                     .show(move |confirmed| {
                         if confirmed {
                             // destroy bypasses CloseRequested after explicit confirmation.
                             let _ = closing_window.destroy();
                         }
-                        closing_window.state::<CloseConfirmation>().0.store(false, Ordering::Relaxed);
+                        closing_window
+                            .state::<CloseConfirmation>()
+                            .0
+                            .store(false, Ordering::Relaxed);
                     });
             }
         })

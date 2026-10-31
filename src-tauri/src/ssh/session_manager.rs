@@ -43,7 +43,14 @@ impl SessionManager {
         input: SshConnectInput,
         on_data: Channel<SshDataEvent>,
     ) -> Result<SshConnectResult, AppErrorDto> {
-        let session_id = new_id();
+        let session_id = match input.session_id.as_deref() {
+            Some(id) => uuid::Uuid::parse_str(id)
+                .map_err(|_| {
+                    AppErrorDto::new(AppErrorCode::HostInvalid, "Invalid session ID", false)
+                })?
+                .to_string(),
+            None => new_id(),
+        };
         let config = self
             .host_service
             .build_connect_config_with_credentials(input)
@@ -62,10 +69,17 @@ impl SessionManager {
             disconnect_requested: disconnect_requested.clone(),
         };
 
-        self.sessions
-            .write()
-            .await
-            .insert(session_id.clone(), handle);
+        {
+            let mut sessions = self.sessions.write().await;
+            if sessions.contains_key(&session_id) {
+                return Err(AppErrorDto::new(
+                    AppErrorCode::HostInvalid,
+                    "Session ID already exists",
+                    false,
+                ));
+            }
+            sessions.insert(session_id.clone(), handle);
+        }
 
         let worker_input = SessionWorkerInput {
             session_id: session_id.clone(),
@@ -80,11 +94,19 @@ impl SessionManager {
         };
         let sessions = self.sessions.clone();
         let worker_session_id = session_id.clone();
-        tauri::async_runtime::spawn(supervise_worker(sessions, worker_session_id, move || {
-            run_session_worker(app, worker_input)
-        }));
+        let worker_identity = worker_input.disconnect_requested.clone();
+        tauri::async_runtime::spawn(supervise_worker(
+            sessions,
+            worker_session_id,
+            worker_identity,
+            move || run_session_worker(app, worker_input),
+        ));
 
         Ok(SshConnectResult { session_id })
+    }
+
+    pub fn active_session_count(&self) -> Option<usize> {
+        self.sessions.try_read().ok().map(|sessions| sessions.len())
     }
 
     pub async fn write(&self, input: SshWriteInput) -> Result<(), AppErrorDto> {
@@ -142,7 +164,7 @@ impl SessionManager {
 
         let result = try_enqueue(&handle, command);
         if matches!(&result, Err(error) if matches!(error.code, AppErrorCode::SessionClosed)) {
-            self.sessions.write().await.remove(session_id);
+            remove_current_session(&self.sessions, session_id, &handle.disconnect_requested).await;
             crate::app_log!("[session-manager][{session_id}] command channel closed while sending {command_name}");
         }
         result
@@ -152,11 +174,26 @@ impl SessionManager {
 async fn supervise_worker(
     sessions: Arc<RwLock<HashMap<SessionId, SessionHandle>>>,
     session_id: SessionId,
+    identity: Arc<AtomicBool>,
     worker: impl FnOnce() + Send + 'static,
 ) {
     // Await even a panicking worker so every exit removes its handle.
     let _ = tauri::async_runtime::spawn_blocking(worker).await;
-    sessions.write().await.remove(&session_id);
+    remove_current_session(&sessions, &session_id, &identity).await;
+}
+
+async fn remove_current_session(
+    sessions: &RwLock<HashMap<SessionId, SessionHandle>>,
+    session_id: &str,
+    identity: &Arc<AtomicBool>,
+) {
+    let mut sessions = sessions.write().await;
+    if sessions
+        .get(session_id)
+        .is_some_and(|handle| Arc::ptr_eq(&handle.disconnect_requested, identity))
+    {
+        sessions.remove(session_id);
+    }
 }
 
 fn try_enqueue(handle: &SessionHandle, command: SessionCommand) -> Result<(), AppErrorDto> {
@@ -263,12 +300,23 @@ mod tests {
     async fn supervisor_cleans_up_normal_and_panicking_workers() {
         for panics in [false, true] {
             let (handle, _rx) = handle(1);
+            let identity = handle.disconnect_requested.clone();
             let sessions = Arc::new(RwLock::new(HashMap::from([("test".into(), handle)])));
-            supervise_worker(sessions.clone(), "test".into(), move || {
+            supervise_worker(sessions.clone(), "test".into(), identity, move || {
                 assert!(!panics, "simulated worker failure");
             })
             .await;
             assert!(sessions.read().await.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn old_worker_cleanup_cannot_remove_a_replacement_with_the_same_id() {
+        let (old_handle, _old_rx) = handle(1);
+        let (replacement, _new_rx) = handle(1);
+        let identity = old_handle.disconnect_requested;
+        let sessions = Arc::new(RwLock::new(HashMap::from([("test".into(), replacement)])));
+        supervise_worker(sessions.clone(), "test".into(), identity, || {}).await;
+        assert!(sessions.read().await.contains_key("test"));
     }
 }

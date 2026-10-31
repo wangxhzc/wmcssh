@@ -15,6 +15,7 @@ pub enum SessionStatus {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnectInput {
+    pub session_id: Option<SessionId>,
     pub host_id: HostId,
     pub initial_cols: u16,
     pub initial_rows: u16,
@@ -158,6 +159,21 @@ pub struct SshErrorPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_input_accepts_preassigned_and_legacy_session_ids() {
+        let mut input = serde_json::json!({
+            "hostId": "host", "initialCols": 80, "initialRows": 24
+        });
+        let legacy: SshConnectInput = serde_json::from_value(input.clone()).unwrap();
+        assert!(legacy.session_id.is_none());
+        input["sessionId"] = serde_json::json!("440c132f-c186-47ec-9115-9c2358c6be01");
+        let assigned: SshConnectInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            assigned.session_id.as_deref(),
+            Some("440c132f-c186-47ec-9115-9c2358c6be01")
+        );
+    }
 
     #[test]
     fn ssh_data_event_matches_frontend_channel_contract() {

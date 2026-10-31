@@ -6,6 +6,7 @@ import {
   enqueueDownloadRemotePath,
   enqueueUploadRemoteDirectory,
   enqueueUploadRemoteFile,
+  closeFileTransferSession,
   deleteRemotePath,
   listRemoteDirectory,
   localUploadKind,
@@ -244,6 +245,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
               message: `文件传输认证失败：${appError.message}`
             });
             if (!credentials) throw appError;
+            if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) return;
             host = await rememberConnectionCredentials(host, credentials);
             result = await openFileTransferSession({
               hostId: host.id,
@@ -255,6 +257,10 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
             });
           }
           activeTransferSessionId = result.transferSessionId;
+          if (!useTerminalStore.getState().tabs.some((tab) => tab.tabId === tabId)) {
+            await closeFileTransferSession({ transferSessionId: activeTransferSessionId });
+            return;
+          }
           bindFileTransferSession(tabId, activeTransferSessionId);
         }
 
