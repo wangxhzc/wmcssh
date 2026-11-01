@@ -34,6 +34,7 @@ export function TransferQueue({ transferSessionId, compact = false }: TransferQu
   const loadTasks = useTransferQueueStore((state) => state.loadTasks);
   const cancelTask = useTransferQueueStore((state) => state.cancelTask);
   const deleteTask = useTransferQueueStore((state) => state.deleteTask);
+  const [refreshing, setRefreshing] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(() => new Set());
   const visibleTasks = useMemo(() => tasks
@@ -45,6 +46,16 @@ export function TransferQueue({ transferSessionId, compact = false }: TransferQu
     const timer = window.setInterval(() => void loadTasks(), 1000);
     return () => window.clearInterval(timer);
   }, [loadTasks]);
+
+  const requestRefresh = async () => {
+    if (useTransferQueueStore.getState().loading) return;
+    setRefreshing(true);
+    try {
+      await loadTasks();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const requestCancel = async (transferId: string) => {
     setCancellingIds((ids) => new Set(ids).add(transferId));
@@ -84,8 +95,8 @@ export function TransferQueue({ transferSessionId, compact = false }: TransferQu
             ? `${visibleTasks.filter((task) => task.status === "running" || task.status === "queued").length} 个进行中 · ${visibleTasks.length} 个任务`
             : "传输任务"}
         </span>
-        <button type="button" className="ghost-button" disabled={loading} onClick={() => void loadTasks()}>
-          {loading ? "刷新中..." : "刷新"}
+        <button type="button" className="ghost-button" disabled={refreshing} aria-busy={refreshing} onClick={() => void requestRefresh()}>
+          刷新
         </button>
       </div>
 

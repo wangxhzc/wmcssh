@@ -115,6 +115,8 @@ impl SessionManager {
             .await
     }
 
+    // Keep the API supported by older Linux Rust toolchains.
+    #[allow(deprecated)]
     pub async fn acknowledge_output(&self, session_id: &str, bytes: usize) {
         if let Some(handle) = self.sessions.read().await.get(session_id) {
             let _ = handle.pending_output.fetch_update(
@@ -196,6 +198,8 @@ async fn remove_current_session(
     }
 }
 
+// Keep the API supported by older Linux Rust toolchains.
+#[allow(deprecated)]
 fn try_enqueue(handle: &SessionHandle, command: SessionCommand) -> Result<(), AppErrorDto> {
     let bytes = match &command {
         SessionCommand::Write(data) => data.len(),

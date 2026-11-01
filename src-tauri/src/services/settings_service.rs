@@ -127,7 +127,7 @@ impl SettingsService {
                     serde_json::from_str::<String>(value).unwrap_or_else(|_| value.clone());
                 decoded.trim().to_string()
             })
-            .and_then(|value| if value.is_empty() { None } else { Some(value) })
+            .filter(|value| !value.is_empty())
     }
 
     fn read_u16(values: &HashMap<String, String>, key: &str, default: u16) -> u16 {

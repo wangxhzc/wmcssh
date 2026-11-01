@@ -10,6 +10,12 @@ mod services;
 mod ssh;
 mod utils;
 
+// Tauri links its resource archive only into application binaries by default.
+// The test harness needs the same manifest to load Common Controls APIs.
+#[cfg(all(test, target_os = "windows", target_env = "gnu"))]
+#[link(name = "resource", kind = "static", modifiers = "+whole-archive")]
+extern "C" {}
+
 use app_state::AppState;
 use commands::*;
 use db::sqlite::init_sqlite;

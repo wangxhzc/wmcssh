@@ -107,10 +107,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   }, [open]);
 
   useEffect(() => {
-    if (open && activeSection === "security" && !keysLoaded && !keysLoading) {
+    if (open && activeSection === "security" && !keysLoaded && !keysLoading && !keysError) {
       void loadKeys();
     }
-  }, [activeSection, keysLoaded, keysLoading, loadKeys, open]);
+  }, [activeSection, keysError, keysLoaded, keysLoading, loadKeys, open]);
 
   useEffect(() => {
     if (open && settingsLoaded && !dirty) setDraft(terminalSettings);
@@ -485,14 +485,14 @@ function SecuritySettings({
         title="已信任的主机密钥"
         description="连接前会用这些记录验证远程服务器身份。删除后，下次连接需要重新确认。"
         action={(
-          <button type="button" className="ghost-button" disabled={loading} onClick={onRefresh}>
-            {loading ? "刷新中..." : "刷新"}
+          <button type="button" className="ghost-button" disabled={loading} aria-busy={loading} onClick={onRefresh}>
+            刷新
           </button>
         )}
       />
       {error ? <div className="settings-inline-error">{error}</div> : null}
       {!loaded && loading ? <div className="settings-empty">正在读取已信任的主机密钥...</div> : null}
-      {loaded && !loading && keys.length === 0 ? (
+      {loaded && keys.length === 0 ? (
         <div className="settings-empty">
           <strong>暂无已信任的主机密钥</strong>
           <span>首次连接服务器并确认指纹后，记录会显示在这里。</span>

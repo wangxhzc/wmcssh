@@ -331,8 +331,12 @@ fn known_host_name(hostname: &str, port: u16) -> String {
 }
 
 fn sync_file(path: &Path) -> Result<(), AppErrorDto> {
-    std::fs::OpenOptions::new()
-        .read(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Windows FlushFileBuffers requires a handle opened for writing.
+    #[cfg(windows)]
+    options.write(true);
+    options
         .open(path)
         .and_then(|file| file.sync_all())
         .map_err(AppErrorDto::io)

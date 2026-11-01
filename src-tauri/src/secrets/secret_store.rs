@@ -5,6 +5,8 @@ use std::sync::Arc;
 pub type DynSecretStore = Arc<dyn SecretStore + Send + Sync>;
 
 #[async_trait]
+// async_trait adds must_use to futures that Rust already marks must_use.
+#[allow(clippy::double_must_use)]
 pub trait SecretStore {
     async fn set_secret(&self, key: &str, value: &str) -> Result<(), AppErrorDto>;
     async fn get_secret(&self, key: &str) -> Result<String, AppErrorDto>;
