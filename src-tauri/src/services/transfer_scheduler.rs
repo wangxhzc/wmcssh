@@ -54,7 +54,7 @@ impl TransferScheduler {
     pub fn submit(&self, key: String, job: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
         let (lock, ready) = &*self.shared;
         let mut queue = lock.lock().unwrap();
-        if queue.jobs.len() >= 200 {
+        if queue.jobs.len() >= super::transfer_config::get().max_retained_tasks {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 "文件传输队列已满，请稍后重试",

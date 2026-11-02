@@ -1,6 +1,7 @@
 use super::opened_file::{
     file_too_large, launch_default_application, open_temporary_file, MAX_OPEN_FILE_BYTES,
 };
+use super::transfer_config::get as transfer_config;
 use crate::contracts::{
     AppErrorCode, AppErrorDto, CloseFileTransferSessionInput, DownloadRemotePathInput,
     ListRemoteDirectoryInput, ListRemoteDirectoryResult, OpenFileTransferSessionInput,
@@ -29,9 +30,6 @@ const S_IFMT: u32 = 0o170000;
 const S_IFDIR: u32 = 0o040000;
 const S_IFLNK: u32 = 0o120000;
 const ROOT_PATH: &str = "/";
-const MAX_DIRECTORY_FILE_COUNT: usize = 1000;
-const MAX_DIRECTORY_DEPTH: usize = 10;
-const MAX_RETAINED_TASKS: usize = 200;
 const DIRECTORY_LIMIT_MESSAGE: &str = "文件数量过多请打包后上传或下载";
 const TRANSFER_BUFFER_SIZE: usize = 256 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
@@ -775,7 +773,7 @@ fn delete_transfer_record(
 }
 
 fn ensure_transfer_task_capacity(task_count: usize) -> Result<(), AppErrorDto> {
-    if task_count >= MAX_RETAINED_TASKS {
+    if task_count >= transfer_config().max_retained_tasks {
         Err(AppErrorDto::new(
             AppErrorCode::Unsupported,
             "后台传输记录过多，请删除已结束的记录或等待成功记录自动清理后重试",
@@ -1062,7 +1060,7 @@ fn scan_remote_directory(
     manifest: &mut DownloadManifest,
 ) -> Result<(), AppErrorDto> {
     check_cancelled(cancel)?;
-    if depth > MAX_DIRECTORY_DEPTH {
+    if depth > transfer_config().max_directory_depth {
         return Err(directory_limit_error());
     }
     let entries = sftp.readdir(Path::new(remote_dir)).map_err(|error| {
@@ -1097,7 +1095,7 @@ fn scan_remote_directory(
                 )?;
             }
             RemoteFileEntryType::File => {
-                if manifest.files.len() >= MAX_DIRECTORY_FILE_COUNT {
+                if manifest.files.len() >= transfer_config().max_directory_files {
                     return Err(directory_limit_error());
                 }
                 manifest.total_bytes = manifest.total_bytes.saturating_add(stat.size.unwrap_or(0));
@@ -1313,10 +1311,16 @@ fn collect_remote_delete_plan(
     depth: usize,
     plan: &mut Vec<(String, bool)>,
 ) -> Result<(), AppErrorDto> {
-    if depth > MAX_DIRECTORY_DEPTH || plan.len() >= MAX_DIRECTORY_FILE_COUNT {
+    if depth > transfer_config().max_directory_depth
+        || plan.len() >= transfer_config().max_delete_entries
+    {
         return Err(AppErrorDto::new(
             AppErrorCode::IoError,
-            "删除目录超过限制（最多 1000 个条目、10 层子目录）",
+            format!(
+                "删除目录超过限制（最多 {} 个条目、{} 层子目录）",
+                transfer_config().max_delete_entries,
+                transfer_config().max_directory_depth
+            ),
             false,
         ));
     }
@@ -1350,10 +1354,13 @@ fn collect_remote_delete_plan(
             collect_remote_delete_plan(sftp, &join_remote_path(path, name), depth + 1, plan)?;
         }
     }
-    if plan.len() >= MAX_DIRECTORY_FILE_COUNT {
+    if plan.len() >= transfer_config().max_delete_entries {
         return Err(AppErrorDto::new(
             AppErrorCode::IoError,
-            "删除目录超过 1000 个条目限制",
+            format!(
+                "删除目录超过 {} 个条目限制",
+                transfer_config().max_delete_entries
+            ),
             false,
         ));
     }
@@ -1362,7 +1369,7 @@ fn collect_remote_delete_plan(
 }
 
 fn remove_remote_tree(sftp: &ssh2::Sftp, path: &str, depth: usize) -> Result<(), AppErrorDto> {
-    if depth > MAX_DIRECTORY_DEPTH + 1 {
+    if depth > transfer_config().max_directory_depth + 1 {
         return Err(directory_limit_error());
     }
     let entries = match sftp.readdir(Path::new(path)) {
@@ -1498,7 +1505,7 @@ fn validate_directory_payload(
     files: &[UploadRemoteDirectoryFilePayload],
 ) -> Result<(), AppErrorDto> {
     validate_remote_entry_name(directory_name, "Directory name")?;
-    if files.len() > MAX_DIRECTORY_FILE_COUNT {
+    if files.len() > transfer_config().max_directory_files {
         return Err(directory_limit_error());
     }
     for path in directories
@@ -1507,7 +1514,7 @@ fn validate_directory_payload(
         .chain(files.iter().map(|file| file.relative_path.as_str()))
     {
         validate_relative_path(path)?;
-        if relative_depth(path) > MAX_DIRECTORY_DEPTH {
+        if relative_depth(path) > transfer_config().max_directory_depth {
             return Err(directory_limit_error());
         }
     }
@@ -1888,8 +1895,8 @@ mod tests {
 
     #[test]
     fn bounds_the_number_of_retained_transfer_tasks() {
-        assert!(ensure_transfer_task_capacity(MAX_RETAINED_TASKS - 1).is_ok());
-        let error = ensure_transfer_task_capacity(MAX_RETAINED_TASKS)
+        assert!(ensure_transfer_task_capacity(transfer_config().max_retained_tasks - 1).is_ok());
+        let error = ensure_transfer_task_capacity(transfer_config().max_retained_tasks)
             .expect_err("task capacity must be bounded");
         assert!(matches!(error.code, AppErrorCode::Unsupported));
         assert!(error.retryable);

@@ -160,3 +160,8 @@ pub async fn ssh_delete_transfer_task(
         .file_transfer_service
         .delete_transfer_task(&input.transfer_id)
 }
+
+#[tauri::command]
+pub fn get_transfer_config() -> crate::services::transfer_config::TransferConfig {
+    crate::services::transfer_config::get().clone()
+}

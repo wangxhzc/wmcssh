@@ -8,6 +8,8 @@ import { loadTerminalFonts } from "../terminalFonts";
 import { terminalRegistry } from "../terminalRegistry";
 import { queueTerminalInput } from "../actions";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
+import { PastePreviewDialog } from "./PastePreviewDialog";
+import { createPasteRequest } from "../pasteRequest";
 
 export type TerminalViewProps = {
   tabId: string;
@@ -38,11 +40,31 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
   const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
   const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
   const middlePasteLockRef = useRef<number>(0);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const pastePendingRef = useRef(false);
+  const [pastePreview, setPastePreview] = useState<{ text: string; send: () => void } | null>(null);
   const terminalSettings = useSettingsStore((state) => state.terminalSettings);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const contextMenuPosition = useAnchoredMenuPosition(contextMenu, menuRef);
 
   const closeContextMenu = () => setContextMenu(null);
+
+  const requestPaste = (text: string, runtime: NonNullable<ReturnType<typeof terminalRegistry.get>>) => {
+    if (!text || !activeRef.current || pastePendingRef.current || terminalRegistry.get(tabId) !== runtime) return;
+    const request = createPasteRequest(text, runtime, () => terminalRegistry.get(tabId) === runtime);
+    if (request.needsPreview) {
+      pastePendingRef.current = true;
+      setPastePreview(request);
+    } else request.send();
+  };
+
+  const closePastePreview = () => {
+    pastePendingRef.current = false;
+    setPastePreview(null);
+  };
+
+  useEffect(() => { closePastePreview(); }, [active, sessionId]);
 
   const focusTerminal = () => {
     requestAnimationFrame(() => {
@@ -147,7 +169,7 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
       runtime.terminal.focus();
       closeContextMenu();
       void (isLinux ? readPrimarySelection() : readText()).then((text) => {
-        if (text && terminalRegistry.get(tabId) === runtime) runtime.terminal.paste(text);
+        if (text) requestPaste(text, runtime);
       }).catch((error) => console.error("[wmcssh][terminal] middle paste failed", error));
     };
     const handleMiddleAuxClick = (event: MouseEvent) => {
@@ -173,7 +195,7 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
       const operation = action === "copy"
         ? (selection ? writeText(selection) : Promise.resolve())
         : (action === "pastePrimary" ? readPrimarySelection() : readText()).then((text) => {
-            if (text && terminalRegistry.get(tabId) === runtime) runtime.terminal.paste(text);
+            if (text) requestPaste(text, runtime);
           });
       void operation.catch((error) => console.error("[wmcssh][terminal] clipboard operation failed", error));
     };
@@ -185,9 +207,11 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
       event.stopImmediatePropagation();
     };
     const handleNativeMiddlePaste = (event: ClipboardEvent) => {
-      if (Date.now() - middlePasteLockRef.current >= 250) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (Date.now() - middlePasteLockRef.current < 250) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (text) requestPaste(text, runtime);
     };
     element.addEventListener("keydown", handleClipboardShortcut, true);
     element.addEventListener("mouseup", handleMiddleMouseUp, true);
@@ -397,6 +421,12 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
       <div ref={scrollbarTrackRef} className="terminal-scrollbar" aria-hidden="true">
         <div ref={scrollbarThumbRef} className="terminal-scrollbar-thumb" />
       </div>
+      {active && pastePreview ? <PastePreviewDialog text={pastePreview.text}
+        onClose={closePastePreview} onConfirm={() => {
+          if (!pastePendingRef.current) return;
+          closePastePreview();
+          pastePreview.send();
+        }} /> : null}
       {contextMenu ? (
         <div
           ref={menuRef}
@@ -432,7 +462,8 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
               try {
                 const text = await readText();
                 if (text) {
-                  terminalRegistry.get(tabId)?.terminal.paste(text);
+                  const current = terminalRegistry.get(tabId);
+                  if (current) requestPaste(text, current);
                 }
               } finally {
                 focusTerminal();

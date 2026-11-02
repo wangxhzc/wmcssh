@@ -18,6 +18,21 @@ import type {
 } from "../../types/fileTransfer";
 import { normalizeAppError } from "../../types/errors";
 
+export type TransferConfig = {
+  maxDirectoryFiles: number;
+  maxDeleteEntries: number;
+  maxDirectoryDepth: number;
+  maxRetainedTasks: number;
+};
+
+export async function getTransferConfig(): Promise<TransferConfig> {
+  try {
+    return await invoke<TransferConfig>("get_transfer_config");
+  } catch (error) {
+    throw normalizeAppError(error);
+  }
+}
+
 export async function renameRemotePath(input: RenameRemotePathInput): Promise<string> {
   try {
     return await invoke<string>("ssh_rename_remote_path", { input });

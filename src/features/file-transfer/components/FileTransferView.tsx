@@ -4,6 +4,7 @@ import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { readDir } from "@tauri-apps/plugin-fs";
 import {
   enqueueDownloadRemotePath,
+  getTransferConfig,
   enqueueUploadRemoteDirectory,
   enqueueUploadRemoteFile,
   closeFileTransferSession,
@@ -43,8 +44,6 @@ type FileTransferViewProps = {
   active: boolean;
 };
 
-const MAX_DIRECTORY_FILE_COUNT = 1000;
-const MAX_DIRECTORY_DEPTH = 10;
 const DIRECTORY_LIMIT_MESSAGE = "文件数量过多请打包后上传或下载";
 
 function parentPath(path: string) {
@@ -69,11 +68,12 @@ function relativeDepth(path: string) {
 }
 
 async function collectLocalDirectoryPayload(rootPath: string) {
+  const limits = await getTransferConfig();
   const directories: string[] = [];
   const files: UploadRemoteDirectoryFilePayload[] = [];
 
   async function visit(currentPath: string, relativeDirPath: string, depth: number) {
-    if (depth > MAX_DIRECTORY_DEPTH) {
+    if (depth > limits.maxDirectoryDepth) {
       throw new Error(DIRECTORY_LIMIT_MESSAGE);
     }
 
@@ -82,7 +82,7 @@ async function collectLocalDirectoryPayload(rootPath: string) {
       const childPath = joinLocalPath(currentPath, entry.name);
       const relativePath = relativeDirPath ? `${relativeDirPath}/${entry.name}` : entry.name;
 
-      if (relativeDepth(relativePath) > MAX_DIRECTORY_DEPTH) {
+      if (relativeDepth(relativePath) > limits.maxDirectoryDepth) {
         throw new Error(DIRECTORY_LIMIT_MESSAGE);
       }
 
@@ -94,7 +94,7 @@ async function collectLocalDirectoryPayload(rootPath: string) {
 
       if (!entry.isFile) continue;
 
-      if (files.length >= MAX_DIRECTORY_FILE_COUNT) {
+      if (files.length >= limits.maxDirectoryFiles) {
         throw new Error(DIRECTORY_LIMIT_MESSAGE);
       }
 
@@ -115,6 +115,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
   const dropSubmitting = useRef(false);
   const [state, setState] = useState<FileTransferLoadState>({ status: "idle" });
   const [directory, setDirectory] = useState<ListRemoteDirectoryResult>();
+  const [pathDraft, setPathDraft] = useState("");
   const [selection, setSelection] = useState<FileSelection>({ paths: [] });
   const selectedEntries = directory?.entries.filter((entry) => selection.paths.includes(entry.path)) ?? [];
   const requestedPath = useRef<string | undefined>(undefined);
@@ -268,6 +269,7 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         if (version !== loadVersion.current) return;
         requestedPath.current = result.path;
         setDirectory(result);
+        setPathDraft(result.path);
         setSelection((previous) => reconcileSelection(previous, result.path, result.entries.map((entry) => entry.path)));
         setContextMenu(null);
         setState({
@@ -726,9 +728,30 @@ export function FileTransferView({ tabId, hostId, transferSessionId, active }: F
         >
           传输队列
         </button>
-        <div className="file-transfer-path">
-          {directory?.path ?? requestedPath.current ?? (state.status === "error" ? "尚未载入目录" : "正在连接远程目录...")}
-        </div>
+        <input
+          className="file-transfer-path"
+          aria-label="远端目录路径"
+          value={pathDraft}
+          placeholder={state.status === "error" ? "尚未载入目录" : "正在连接远程目录..."}
+          disabled={busy || state.status === "loading" || !transferSessionId}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => setPathDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === "Enter") {
+              event.preventDefault();
+              const path = pathDraft.trim();
+              if (path) {
+                const target = path.startsWith("/") ? path : `${directory?.path ?? ""}/${path}`;
+                void loadDirectory(target);
+              }
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              setPathDraft(directory?.path ?? "");
+            }
+          }}
+        />
         <button type="button" className="ghost-button" disabled={busy || state.status === "loading" || selectedEntries.length === 0}
           onClick={() => void downloadSelection()}>
           {selectedEntries.length ? `下载 (${selectedEntries.length})` : "下载"}

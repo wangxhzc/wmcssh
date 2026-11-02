@@ -12,6 +12,15 @@ pub fn connect_ssh_transport(
     timeout_ms: u64,
 ) -> Result<Session, AppErrorDto> {
     let tcp = connect_tcp_stream(hostname, port, timeout_ms)?;
+    // Interactive SSH sends small packets; do not wait for Nagle coalescing.
+    tcp.set_nodelay(true).map_err(|err| {
+        AppErrorDto::with_details(
+            AppErrorCode::IoError,
+            "Failed to configure SSH TCP connection",
+            err.to_string(),
+            true,
+        )
+    })?;
     let mut session = Session::new().map_err(|err| {
         AppErrorDto::with_details(
             AppErrorCode::IoError,

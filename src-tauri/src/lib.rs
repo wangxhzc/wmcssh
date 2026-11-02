@@ -132,6 +132,7 @@ pub fn run() {
                     .app_data_dir()
                     .map_err(|err| anyhow::anyhow!("failed to get app data dir: {err}"))?;
                 std::fs::create_dir_all(&app_dir)?;
+                services::transfer_config::load(&app_dir)?;
                 let secret_cache_path = app_dir.join("wmcssh.json");
                 let host_key_store = Arc::new(HostKeyStore::new(app_dir.join("known_hosts")));
                 let vault = Arc::new(EncryptedSecretStore::new(db.clone(), secret_cache_path));
@@ -268,6 +269,7 @@ pub fn run() {
             ssh_list_trusted_host_keys,
             ssh_delete_trusted_host_key,
             get_terminal_settings,
+            get_transfer_config,
             update_terminal_settings,
             reset_terminal_settings,
             list_recent_sessions,
