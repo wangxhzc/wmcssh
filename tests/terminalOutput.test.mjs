@@ -30,6 +30,7 @@ function fixture() {
     require(name) {
       if (name === "@xterm/xterm") return { Terminal };
       if (name === "./terminalTheme") return { defaultTerminalTheme };
+      if (name === "./outputHighlight") return { OutputHighlighter: class { setEnabled() {} dispose() {} } };
       if (name === "@xterm/addon-web-links") return { WebLinksAddon: class {} };
       if (name === "@xterm/addon-fit") return { FitAddon: class {
         dimensions = { cols: 100, rows: 30 };

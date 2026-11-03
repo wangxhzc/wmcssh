@@ -450,6 +450,15 @@ function TerminalSettings({ draft, disabled, onChange }: {
           <small>在当前终端与新终端中显示闪烁光标。</small>
         </span>
       </label>
+      <label className="settings-toggle-row">
+        <input
+          type="checkbox"
+          checked={draft.outputHighlight}
+          disabled={disabled}
+          onChange={(event) => onChange({ outputHighlight: event.target.checked })}
+        />
+        <span><strong>输出高亮</strong></span>
+      </label>
     </div>
   );
 }

@@ -25,6 +25,8 @@ pub struct TerminalSettingsDto {
     pub line_height: f32,
     pub letter_spacing: f32,
     pub cursor_blink: bool,
+    #[serde(default)]
+    pub output_highlight: bool,
     pub scrollback: u32,
 }
 
@@ -38,8 +40,26 @@ impl Default for TerminalSettingsDto {
             line_height: 1.2,
             letter_spacing: 0.0,
             cursor_blink: true,
+            output_highlight: false,
             scrollback: 10_000,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalSettingsDto;
+
+    #[test]
+    fn output_highlight_defaults_off_and_round_trips() {
+        let mut value = serde_json::to_value(TerminalSettingsDto::default()).unwrap();
+        assert_eq!(value["outputHighlight"], false);
+        value.as_object_mut().unwrap().remove("outputHighlight");
+        let legacy: TerminalSettingsDto = serde_json::from_value(value.clone()).unwrap();
+        assert!(!legacy.output_highlight);
+        value["outputHighlight"] = true.into();
+        let enabled: TerminalSettingsDto = serde_json::from_value(value).unwrap();
+        assert!(enabled.output_highlight);
     }
 }
 

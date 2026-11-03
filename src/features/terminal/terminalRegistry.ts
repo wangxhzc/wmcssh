@@ -10,6 +10,7 @@ import { writeText } from "../../services/tauri/clipboardApi";
 import { decodeRemoteClipboard } from "./remoteClipboard";
 import { activateTerminalLink, installTerminalIntegration } from "./terminalIntegration";
 import { defaultTerminalTheme } from "./terminalTheme";
+import { OutputHighlighter } from "./outputHighlight";
 
 const ERASE_SCROLLBACK_SEQUENCES = [
   new Uint8Array([0x1b, 0x5b, 0x33, 0x4a]),
@@ -21,6 +22,7 @@ export type TerminalRuntime = {
   sessionId?: string;
   terminal: Terminal;
   fitAddon: FitAddon;
+  outputHighlighter: OutputHighlighter;
   dataChannel?: Channel<SshDataEvent>;
   disposables: Array<{ dispose: () => void }>;
   mounted: boolean;
@@ -106,7 +108,7 @@ class TerminalRegistry {
       lineHeight: settings.lineHeight,
       letterSpacing,
       theme: defaultTerminalTheme,
-      allowProposedApi: false
+      allowProposedApi: true
     });
 
     const fitAddon = new FitAddon();
@@ -121,7 +123,10 @@ class TerminalRegistry {
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new WebLinksAddon(activateTerminalLink, linkOptions));
 
+    const outputHighlighter = new OutputHighlighter(terminal);
+    outputHighlighter.setEnabled(settings.outputHighlight);
     const runtime: TerminalRuntime = {
+      outputHighlighter,
       tabId,
       terminal,
       fitAddon,
@@ -130,6 +135,7 @@ class TerminalRegistry {
       mounted: false
     };
 
+    runtime.disposables.push(outputHighlighter);
     runtime.disposables.push(installTerminalIntegration(terminal, tabId));
     runtime.disposables.push(terminal.parser.registerOscHandler(52, async (data) => {
       const text = decodeRemoteClipboard(data);
@@ -157,6 +163,7 @@ class TerminalRegistry {
       }
 
       runtime.terminal.options.cursorBlink = settings.cursorBlink;
+      runtime.outputHighlighter.setEnabled(settings.outputHighlight);
       runtime.terminal.options.scrollback = settings.scrollback;
       runtime.terminal.options.fontSize = settings.fontSize;
       runtime.terminal.options.fontFamily = settings.fontFamily;

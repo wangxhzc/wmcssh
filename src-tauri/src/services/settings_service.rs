@@ -11,6 +11,7 @@ const TERMINAL_LINE_HEIGHT_KEY: &str = "terminal.lineHeight";
 const TERMINAL_LETTER_SPACING_KEY: &str = "terminal.letterSpacing";
 const TERMINAL_CURSOR_BLINK_KEY: &str = "terminal.cursorBlink";
 const TERMINAL_SCROLLBACK_KEY: &str = "terminal.scrollback";
+const TERMINAL_OUTPUT_HIGHLIGHT_KEY: &str = "terminal.outputHighlight";
 const LEGACY_DEFAULT_TERMINAL_FONT_FAMILY: &str =
     r#""AppTerminalMono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", Consolas, monospace"#;
 
@@ -65,6 +66,7 @@ impl SettingsService {
                 defaults.cursor_blink,
             ),
             scrollback: Self::read_u32(&values, TERMINAL_SCROLLBACK_KEY, defaults.scrollback),
+            output_highlight: Self::read_bool(&values, TERMINAL_OUTPUT_HIGHLIGHT_KEY, false),
         })
     }
 
@@ -108,6 +110,17 @@ impl SettingsService {
             .await?;
         self.settings_repo
             .set_value(TERMINAL_SCROLLBACK_KEY, &input.scrollback.to_string())
+            .await?;
+
+        self.settings_repo
+            .set_value(
+                TERMINAL_OUTPUT_HIGHLIGHT_KEY,
+                if input.output_highlight {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
             .await?;
 
         self.get_terminal_settings().await

@@ -6,6 +6,7 @@ export type TerminalSettingsDto = {
   lineHeight: number;
   letterSpacing: number;
   cursorBlink: boolean;
+  outputHighlight: boolean;
   scrollback: number;
 };
 
@@ -20,5 +21,6 @@ export const defaultTerminalSettings: TerminalSettingsDto = {
   lineHeight: 1.2,
   letterSpacing: 0,
   cursorBlink: true,
+  outputHighlight: false,
   scrollback: 10000
 };
