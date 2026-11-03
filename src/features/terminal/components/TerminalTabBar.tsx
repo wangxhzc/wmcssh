@@ -182,7 +182,7 @@ export function TerminalTabBar() {
             title={tab.kind === "terminal" ? tab.errorMessage ?? `${tab.title}${tab.remoteTitle ? ` · ${tab.remoteTitle}` : ""} ${sessionStatusLabel[tab.status]}${tab.currentDirectory ? `\n${tab.currentDirectory}` : ""}` : tab.title}
           >
             <button type="button" className="tab-activate" aria-pressed={tab.tabId === activeTabId} onClick={() => { if (!reorder.suppressClick()) activateTab(tab.tabId); }}>
-              <TerminalTabTitle title={tab.kind === "terminal" && tab.remoteTitle ? `${tab.title} · ${tab.remoteTitle}` : tab.title} active={tab.tabId === activeTabId} />{tab.kind === "terminal" ? renderStatus(tab.status) : null}
+              <TerminalTabTitle title={tab.title} active={tab.tabId === activeTabId} />{tab.kind === "terminal" ? renderStatus(tab.status) : null}
             </button>
             <button
               type="button"
@@ -230,7 +230,7 @@ export function TerminalTabBar() {
                 activateTab(tab.tabId);
               }}
             >
-              <span className="tab-list-title">{tab.kind === "terminal" && tab.remoteTitle ? `${tab.title} · ${tab.remoteTitle}` : tab.title}</span>
+              <span className="tab-list-title">{tab.title}</span>
               <span className="tab-list-kind">{tab.kind === "terminal" ? sessionStatusLabel[tab.status] : "文件"}</span>
             </button>
           ))}

@@ -265,7 +265,7 @@ export async function connectHost(host: HostDto, suppliedCredentials?: Connectio
   }
 
   const store = useTerminalStore.getState();
-  const tabId = store.createTerminalTab({ hostId: host.id, title: host.name, afterTabId });
+  const tabId = store.createTerminalTab({ hostId: host.id, title: host.hostname, port: host.port, afterTabId });
 
   store.setActiveTab(tabId);
   store.setTabStatus(tabId, "connecting");

@@ -4,6 +4,7 @@ use crate::contracts::{
 };
 use crate::repositories::recent_session_repository::RecentSessionRepository;
 use crate::ssh::client::connect_ssh_session;
+use crate::ssh::shell_integration::{supports_directory_reporting, DIRECTORY_REPORTING_SCRIPT};
 use crate::ssh::types::{SessionCommand, SessionWorkerInput};
 use crate::utils::{base64::encode_base64, time::now_millis};
 use ssh2::ErrorCode;
@@ -77,6 +78,7 @@ fn run_session_worker_inner(
             );
         })?;
 
+    let install_directory_reporting = supports_directory_reporting(&session);
     let mut channel = session.channel_session().map_err(|err| {
         let error = AppErrorDto::with_details(
             AppErrorCode::IoError,
@@ -94,10 +96,16 @@ fn run_session_worker_inner(
         error
     })?;
 
+    let terminal_modes = install_directory_reporting.then(|| {
+        let mut modes = ssh2::PtyModes::new();
+        modes.set_boolean(ssh2::PtyModeOpcode::ECHO, false);
+        modes.set_boolean(ssh2::PtyModeOpcode::ECHONL, false);
+        modes
+    });
     channel
         .request_pty(
             "xterm-256color",
-            None,
+            terminal_modes,
             Some((
                 input.config.initial_cols as u32,
                 input.config.initial_rows as u32,
@@ -138,6 +146,20 @@ fn run_session_worker_inner(
         );
         error
     })?;
+
+    // Install before accepting terminal input and before the configured startup command.
+    if install_directory_reporting {
+        write_channel_all(input, &mut channel, DIRECTORY_REPORTING_SCRIPT.as_bytes()).map_err(
+            |err| {
+                AppErrorDto::with_details(
+                    AppErrorCode::IoError,
+                    "Failed to write shell integration",
+                    err.to_string(),
+                    true,
+                )
+            },
+        )?;
+    }
 
     session.set_blocking(false);
 

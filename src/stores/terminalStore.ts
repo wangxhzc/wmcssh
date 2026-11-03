@@ -18,6 +18,7 @@ type WorkspaceTabBase = {
 
 export type TerminalTab = WorkspaceTabBase & {
   kind: "terminal";
+  port: number;
   remoteTitle?: string;
   currentDirectory?: string;
   sessionId?: SessionId;
@@ -38,7 +39,7 @@ export type WorkspaceTab = TerminalTab | FileTransferTab;
 type TerminalStore = {
   tabs: WorkspaceTab[];
   activeTabId?: TabId;
-  createTerminalTab: (input: { hostId: HostId; title: string; afterTabId?: TabId }) => TabId;
+  createTerminalTab: (input: { hostId: HostId; title: string; port: number; afterTabId?: TabId }) => TabId;
   createFileTransferTab: (input: { hostId: HostId; title: string; afterTabId?: TabId; initialPath?: string }) => TabId;
   setTerminalMetadata: (tabId: TabId, metadata: { remoteTitle?: string; currentDirectory?: string }) => void;
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
@@ -74,6 +75,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabId,
       hostId: input.hostId,
       title: input.title,
+      port: input.port,
       status: "created",
       createdAt: now,
       lastActiveAt: now
