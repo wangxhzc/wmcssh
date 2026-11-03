@@ -9,32 +9,7 @@ import { sshResize } from "../../services/tauri/sshApi";
 import { writeText } from "../../services/tauri/clipboardApi";
 import { decodeRemoteClipboard } from "./remoteClipboard";
 import { activateTerminalLink, installTerminalIntegration } from "./terminalIntegration";
-
-const DEFAULT_TERMINAL_THEME = {
-  background: "#1C1C1C",
-  foreground: "#E4E4E4",
-  cursor: "#7AA2D6",
-  cursorAccent: "#1C1C1C",
-  selectionBackground: "#7AA2D6",
-  selectionForeground: "#181818",
-  selectionInactiveBackground: "#425F7F",
-  black: "#181818",
-  red: "#C97B7B",
-  green: "#81B29A",
-  yellow: "#D0AD78",
-  blue: "#7AA2D6",
-  magenta: "#A0A0A0",
-  cyan: "#81B29A",
-  white: "#E4E4E4",
-  brightBlack: "#6F6F6F",
-  brightRed: "#C97B7B",
-  brightGreen: "#81B29A",
-  brightYellow: "#D0AD78",
-  brightBlue: "#7AA2D6",
-  brightMagenta: "#A0A0A0",
-  brightCyan: "#81B29A",
-  brightWhite: "#E4E4E4"
-} as const;
+import { defaultTerminalTheme } from "./terminalTheme";
 
 const ERASE_SCROLLBACK_SEQUENCES = [
   new Uint8Array([0x1b, 0x5b, 0x33, 0x4a]),
@@ -130,7 +105,7 @@ class TerminalRegistry {
       fontWeightBold: settings.fontWeightBold,
       lineHeight: settings.lineHeight,
       letterSpacing,
-      theme: DEFAULT_TERMINAL_THEME,
+      theme: defaultTerminalTheme,
       allowProposedApi: false
     });
 

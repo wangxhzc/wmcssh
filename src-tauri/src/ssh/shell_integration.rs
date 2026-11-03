@@ -28,13 +28,20 @@ fn supported_shell(output: &str) -> bool {
 // With echo disabled the initial prompt is still on the cursor line. Erase only
 // that line before the shell redraws its prompt, preserving the login banner.
 pub const DIRECTORY_REPORTING_SCRIPT: &str = concat!(
-    " if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ] && ! typeset -f __wmcssh_report_directory >/dev/null 2>&1; then ",
+    " export COLORTERM=truecolor; if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ] && ! typeset -f __wmcssh_report_directory >/dev/null 2>&1; then ",
     "__wmcssh_report_directory() { local wmcssh_status=$?; local wmcssh_path; ",
     "wmcssh_path=$(printf '%s' \"${PWD#/}\" | od -An -v -tx1 | tr -d ' \\n' | sed 's/../%&/g'); ",
     "printf '\\033]7;file://localhost/%s\\007' \"$wmcssh_path\"; return \"$wmcssh_status\"; }; ",
-    "if [ -n \"${BASH_VERSION-}\" ]; then PROMPT_COMMAND+=(__wmcssh_report_directory); ",
+    // Bash before 5.1 executes only element zero of PROMPT_COMMAND. Preserve
+    // scalar hooks as scalar commands; flatten existing arrays on older Bash.
+    "if [ -n \"${BASH_VERSION-}\" ]; then case \"$(declare -p PROMPT_COMMAND 2>/dev/null)\" in ",
+    "'declare -a'*) if [ \"${BASH_VERSINFO[0]}\" -gt 5 ] || { [ \"${BASH_VERSINFO[0]}\" -eq 5 ] && [ \"${BASH_VERSINFO[1]}\" -ge 1 ]; }; then ",
+    "PROMPT_COMMAND+=(__wmcssh_report_directory); else ",
+    "printf -v __wmcssh_prompt_commands '%s\\n' \"${PROMPT_COMMAND[@]}\"; unset PROMPT_COMMAND; ",
+    "PROMPT_COMMAND=\"${__wmcssh_prompt_commands}__wmcssh_report_directory\"; unset __wmcssh_prompt_commands; fi ;; ",
+    "*) PROMPT_COMMAND=\"${PROMPT_COMMAND-}\"$'\\n''__wmcssh_report_directory' ;; esac; ",
     "elif [ -n \"${ZSH_VERSION-}\" ]; then typeset -ga precmd_functions; precmd_functions+=(__wmcssh_report_directory); fi; fi; ",
-    "if [ -t 1 ]; then printf '\\r\\033[2K'; fi; stty echo 2>/dev/null; :\n"
+    "if [ -t 1 ]; then printf '\\r\\033[2K\\033]777;wmcssh-ready\\007'; fi; stty echo 2>/dev/null; :\n"
 );
 
 #[cfg(test)]
@@ -84,6 +91,8 @@ try:
     os.write(fd, b'cd /tmp\n')
     result = read_until(b'file://localhost/%74%6d%70\x07')
     assert b'cd /tmp' in result, repr(result)
+    os.write(fd, b'printf "color-env=%s-end" "$COLORTERM"\n')
+    read_until(b'color-env=truecolor-end')
 finally:
     os.kill(pid, 9)
     os.waitpid(pid, 0)
@@ -112,7 +121,7 @@ finally:
     #[cfg(unix)]
     fn bash_hook_preserves_existing_commands_and_encodes_paths() {
         let script = format!(
-            "PROMPT_COMMAND='echo existing';\n{0}{0}PWD='/tmp/a #?%'; __wmcssh_report_directory; printf '\\n'; printf '%s\\n' \"${{PROMPT_COMMAND[@]}}\"",
+            "PROMPT_COMMAND='echo existing';\n{0}{0}PWD='/tmp/a #?%'; __wmcssh_report_directory; printf '\\n'; printf '%s\\n' \"${{PROMPT_COMMAND[@]}}\"; [[ $(declare -p PROMPT_COMMAND) != 'declare -a'* ]]",
             DIRECTORY_REPORTING_SCRIPT
         );
         let output = Command::new("bash")
@@ -141,5 +150,52 @@ finally:
             String::from_utf8(output.stdout).unwrap(),
             "\x1b]7;file://localhost/\x07\n42\necho first\necho second\n__wmcssh_report_directory\n"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn legacy_bash_array_hooks_are_combined_before_directory_reporting() {
+        // Exercise the legacy branch with the local Bash; its real 5.0 behavior
+        // is also checked on a remote host during compatibility validation.
+        let integration = DIRECTORY_REPORTING_SCRIPT
+            .replace("${BASH_VERSINFO[0]}", "5")
+            .replace("${BASH_VERSINFO[1]}", "0");
+        let script = format!(
+            "PROMPT_COMMAND=('echo first # comment' 'echo second');\n{integration}PWD='/tmp'; eval \"${{PROMPT_COMMAND[0]}}\"; [[ $(declare -p PROMPT_COMMAND) != 'declare -a'* ]]"
+        );
+        let output = Command::new("bash")
+            .args(["--noprofile", "--norc", "-c", &script])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "first\nsecond\n\x1b]7;file://localhost/%74%6d%70\x07"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn scalar_prompt_command_reports_directory_when_only_element_zero_is_executed() {
+        for original in [
+            "unset PROMPT_COMMAND",
+            "PROMPT_COMMAND=':'",
+            "PROMPT_COMMAND=$': # existing comment'",
+        ] {
+            let script = format!(
+                "{original};\n{}PWD='/tmp'; eval \"${{PROMPT_COMMAND[0]}}\"; PWD='/'; eval \"${{PROMPT_COMMAND[0]}}\"",
+                DIRECTORY_REPORTING_SCRIPT
+            );
+            let output = Command::new("bash")
+                .args(["--noprofile", "--norc", "-c", &script])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                "\x1b]7;file://localhost/%74%6d%70\x07\x1b]7;file://localhost/\x07",
+                "{original}"
+            );
+        }
     }
 }

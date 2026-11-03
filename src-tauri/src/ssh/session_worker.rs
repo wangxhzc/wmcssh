@@ -35,6 +35,14 @@ pub fn run_session_worker(app: AppHandle, mut input: SessionWorkerInput) {
     emit_status(&app, &input, SessionStatus::Connecting, Some("Connecting"));
 
     let result = run_session_worker_inner(&app, &mut input);
+    let trailing = input
+        .startup_output
+        .borrow_mut()
+        .take()
+        .map(|mut filter| filter.finish());
+    if let Some(bytes) = trailing.filter(|bytes| !bytes.is_empty()) {
+        let _ = send_output(&input, &bytes);
+    }
     match result {
         Ok(()) => {}
         Err(error) => {
@@ -79,6 +87,9 @@ fn run_session_worker_inner(
         })?;
 
     let install_directory_reporting = supports_directory_reporting(&session);
+    if install_directory_reporting {
+        *input.startup_output.borrow_mut() = Some(Default::default());
+    }
     let mut channel = session.channel_session().map_err(|err| {
         let error = AppErrorDto::with_details(
             AppErrorCode::IoError,
@@ -96,6 +107,9 @@ fn run_session_worker_inner(
         error
     })?;
 
+    // OpenSSH may reject variables absent from AcceptEnv. Color support must
+    // never prevent opening a terminal; Bash/Zsh also set it in their hook setup.
+    let _ = channel.setenv("COLORTERM", "truecolor");
     let terminal_modes = install_directory_reporting.then(|| {
         let mut modes = ssh2::PtyModes::new();
         modes.set_boolean(ssh2::PtyModeOpcode::ECHO, false);
@@ -542,6 +556,18 @@ fn drain_channel_output(
 }
 
 fn send_output(input: &SessionWorkerInput, bytes: &[u8]) -> Result<(), AppErrorDto> {
+    let filtered = {
+        let mut startup = input.startup_output.borrow_mut();
+        let filtered = startup.as_mut().map(|filter| filter.push(bytes));
+        if startup.as_ref().is_some_and(|filter| filter.is_finished()) {
+            *startup = None;
+        }
+        filtered
+    };
+    let bytes = filtered.as_deref().unwrap_or(bytes);
+    if bytes.is_empty() {
+        return Ok(());
+    }
     input
         .pending_output
         .fetch_add(bytes.len(), Ordering::Relaxed);

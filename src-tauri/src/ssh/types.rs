@@ -1,6 +1,8 @@
 use crate::contracts::{HostId, SessionId, SshDataEvent};
 use crate::repositories::recent_session_repository::RecentSessionRepository;
 use crate::ssh::host_key::HostKeyStore;
+use crate::ssh::shell_startup_output::ShellStartupOutput;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use tauri::ipc::Channel;
@@ -49,6 +51,7 @@ pub struct SessionHandle {
 }
 
 pub struct SessionWorkerInput {
+    pub(super) startup_output: RefCell<Option<ShellStartupOutput>>,
     pub session_id: SessionId,
     pub config: ConnectConfig,
     pub command_rx: std::sync::mpsc::Receiver<SessionCommand>,

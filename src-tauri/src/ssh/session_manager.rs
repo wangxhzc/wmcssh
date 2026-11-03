@@ -82,6 +82,7 @@ impl SessionManager {
         }
 
         let worker_input = SessionWorkerInput {
+            startup_output: Default::default(),
             session_id: session_id.clone(),
             config,
             command_rx,

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
+import { defaultTerminalTheme } from "../src/features/terminal/terminalTheme.ts";
 
 function fixture() {
   const writes = [];
@@ -28,6 +29,7 @@ function fixture() {
     document: { hasFocus: () => false, visibilityState: "hidden", addEventListener() {} },
     require(name) {
       if (name === "@xterm/xterm") return { Terminal };
+      if (name === "./terminalTheme") return { defaultTerminalTheme };
       if (name === "@xterm/addon-web-links") return { WebLinksAddon: class {} };
       if (name === "@xterm/addon-fit") return { FitAddon: class {
         dimensions = { cols: 100, rows: 30 };
