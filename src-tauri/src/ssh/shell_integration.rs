@@ -25,13 +25,16 @@ fn supported_shell(output: &str) -> bool {
 
 // Percent-encode every path byte, including newlines and URI delimiters. Keep the
 // leading slash literal so the existing OSC 7 URI parser sees an absolute path.
+// With echo disabled the initial prompt is still on the cursor line. Erase only
+// that line before the shell redraws its prompt, preserving the login banner.
 pub const DIRECTORY_REPORTING_SCRIPT: &str = concat!(
     " if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ] && ! typeset -f __wmcssh_report_directory >/dev/null 2>&1; then ",
     "__wmcssh_report_directory() { local wmcssh_status=$?; local wmcssh_path; ",
     "wmcssh_path=$(printf '%s' \"${PWD#/}\" | od -An -v -tx1 | tr -d ' \\n' | sed 's/../%&/g'); ",
     "printf '\\033]7;file://localhost/%s\\007' \"$wmcssh_path\"; return \"$wmcssh_status\"; }; ",
     "if [ -n \"${BASH_VERSION-}\" ]; then PROMPT_COMMAND+=(__wmcssh_report_directory); ",
-    "elif [ -n \"${ZSH_VERSION-}\" ]; then typeset -ga precmd_functions; precmd_functions+=(__wmcssh_report_directory); fi; fi; stty echo 2>/dev/null; :\n"
+    "elif [ -n \"${ZSH_VERSION-}\" ]; then typeset -ga precmd_functions; precmd_functions+=(__wmcssh_report_directory); fi; fi; ",
+    "if [ -t 1 ]; then printf '\\r\\033[2K'; fi; stty echo 2>/dev/null; :\n"
 );
 
 #[cfg(test)]
@@ -42,7 +45,7 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn interactive_bash_hides_injection_and_restores_echo() {
+    fn interactive_bash_replaces_initial_prompt_and_restores_echo() {
         let output = Command::new("python3")
             .args([
                 "-c",
@@ -55,6 +58,7 @@ if pid == 0:
     termios.tcsetattr(0, termios.TCSANOW, modes)
     os.environ['PS1'] = 'wmcssh-test> '
     os.environ['HISTFILE'] = '/dev/null'
+    os.write(1, b'Last login: test banner\r\n')
     os.execvp('bash', ['bash', '--noprofile', '--norc', '-i'])
 def read_until(marker):
     data = b''
@@ -65,10 +69,18 @@ def read_until(marker):
             data += os.read(fd, 65536)
     return data
 try:
-    read_until(b'wmcssh-test> ')
+    initial = read_until(b'wmcssh-test> ')
+    assert b'Last login: test banner' in initial, repr(initial)
     os.write(fd, sys.argv[1].encode())
-    result = read_until(b'\x07')
+    result = read_until(b'wmcssh-test> ')
     assert b'__wmcssh_report_directory' not in result, repr(result)
+    # Only the cursor line is cleared; no screen/history erase or cursor-up.
+    assert b'\r\x1b[2K' in result, repr(result)
+    assert result.count(b'\x1b[2K') == 1, repr(result)
+    assert result.index(b'\r\x1b[2K') < result.index(b'\x1b]7;'), repr(result)
+    assert b'\x1b[2J' not in result and b'\x1b[3J' not in result
+    assert b'\x1b[A' not in result
+    assert result.count(b'wmcssh-test> ') == 1, repr(result)
     os.write(fd, b'cd /tmp\n')
     result = read_until(b'file://localhost/%74%6d%70\x07')
     assert b'cd /tmp' in result, repr(result)
