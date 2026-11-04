@@ -1771,9 +1771,9 @@ textarea::placeholder {
 }
 
 .settings-dialog {
-  width: min(920px, 100%);
-  height: min(680px, 100%);
-  min-height: 460px;
+  width: min(840px, 100%);
+  height: min(660px, 100%);
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
@@ -1785,7 +1785,7 @@ textarea::placeholder {
 }
 
 .settings-header {
-  min-height: 64px;
+  min-height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1797,7 +1797,7 @@ textarea::placeholder {
 
 .settings-header h2 {
   margin: 1px 0 0;
-  font-size: 19px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -1823,7 +1823,7 @@ textarea::placeholder {
 .settings-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
+  grid-template-columns: 156px minmax(0, 1fr);
 }
 
 .settings-navigation {
@@ -1839,8 +1839,9 @@ textarea::placeholder {
 
 .settings-navigation button {
   position: relative;
-  display: grid;
-  gap: 3px;
+  display: flex;
+  align-items: center;
+  min-height: 38px;
   width: 100%;
   padding: 10px 12px 10px 15px;
   border: 0;
@@ -1877,11 +1878,6 @@ textarea::placeholder {
   font-weight: 600;
 }
 
-.settings-navigation span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
 .settings-content {
   min-width: 0;
   min-height: 0;
@@ -1905,7 +1901,7 @@ textarea::placeholder {
 
 .settings-section-header h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -1917,79 +1913,35 @@ textarea::placeholder {
   line-height: 1.55;
 }
 
-.settings-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
-.settings-summary-card,
-.settings-info-card,
 .trusted-key-card {
   border: 1px solid var(--border);
   background: var(--panel-bg-2);
 }
 
-.settings-summary-card {
-  display: grid;
-  gap: 7px;
-  padding: 15px;
-}
-
-.settings-summary-card > span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.settings-summary-card > strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 17px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-summary-card > small,
 .trusted-key-card > small {
   color: var(--weak);
   font-size: 11px;
 }
 
-.settings-info-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 8px;
-  padding: 13px 15px;
-}
+.settings-about-brand { font-size: 24px; font-weight: 600; }
+.settings-about-details { display: flex; gap: 24px; padding-block: 16px; border-bottom: 1px solid var(--border); }
+.settings-about-details dt { color: var(--muted); }
+.settings-about-details dd { margin: 0; }
 
-.settings-info-card > div {
+.settings-group {
   min-width: 0;
-  display: grid;
-  gap: 4px;
+  margin: 0 0 22px;
+  padding: 0 0 18px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.settings-info-card strong {
-  font-size: 13px;
-}
-
-.settings-info-card div span {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.settings-state-pill {
-  flex: 0 0 auto;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 11px;
-}
+.settings-group legend { width: 100%; padding: 0 0 14px; font-size: 12px; font-weight: 600; }
+.settings-history-field { max-width: 260px; margin-top: 14px; }
+.settings-advanced summary { color: var(--muted); font-size: 12px; cursor: pointer; padding-block: 4px; }
+.settings-advanced summary:focus-visible { outline: 1px solid var(--accent); outline-offset: 4px; }
+.settings-advanced[open] summary { margin-bottom: 18px; color: var(--text); }
+.settings-advanced .settings-group { border: 0; margin: 0; }
 
 .settings-form-grid {
   display: grid;
@@ -2017,7 +1969,8 @@ textarea::placeholder {
   line-height: 1.5;
 }
 
-.settings-field input {
+.settings-field input,
+.settings-field select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -2030,11 +1983,13 @@ textarea::placeholder {
   font: inherit;
 }
 
-.settings-field input:focus {
+.settings-field input:focus,
+.settings-field select:focus {
   border-color: var(--accent);
 }
 
-.settings-field input:disabled {
+.settings-field input:disabled,
+.settings-field select:disabled {
   opacity: 0.6;
 }
 
@@ -2059,21 +2014,22 @@ textarea::placeholder {
 
 .settings-toggle-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  margin-top: 18px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  background: var(--panel-bg-2);
+  min-height: 34px;
+  margin-top: 6px;
+  padding: 4px 0;
   cursor: pointer;
 }
 
 .settings-toggle-row input {
-  margin-top: 2px;
+  order: 1;
+  margin: 0 0 0 auto;
   accent-color: var(--accent);
 }
 
 .settings-toggle-row span {
+  flex: 1;
   display: grid;
   gap: 3px;
 }
@@ -2536,15 +2492,10 @@ textarea::placeholder {
     padding-inline: 10px;
   }
 
-  .settings-navigation button span {
-    display: none;
-  }
-
   .settings-content {
     padding: 18px 14px;
   }
 
-  .settings-summary-grid,
   .settings-form-grid {
     grid-template-columns: 1fr;
   }
@@ -2562,9 +2513,16 @@ textarea::placeholder {
     padding-left: 14px;
   }
 
-  .settings-feedback {
-    display: none;
-  }
+  .settings-footer { flex-wrap: wrap; gap: 8px; }
+  .settings-feedback { overflow-wrap: anywhere; }
+  .settings-footer-actions { margin-left: auto; }
+}
+
+@media (max-width: 520px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-navigation { flex-direction: row; padding: 6px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .settings-navigation button { justify-content: center; padding: 8px; }
+  .settings-footer-actions { gap: 6px; }
 }
 
 .host-card { user-select: none; touch-action: none; }

@@ -4,7 +4,6 @@ import { deleteTrustedHostKey, listTrustedHostKeys } from "../../../services/tau
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { defaultTerminalSettings, type TerminalSettingsDto } from "../../../types/settings";
 import type { TrustedHostKey } from "../../../types/ssh";
-import { TransferQueue } from "../../file-transfer/components/TransferQueue";
 import { normalizeTerminalSettings, terminalSettingsChanged } from "../terminalSettingsDraft";
 import { useDialogFocus } from "../../../app/useDialogFocus";
 
@@ -13,13 +12,12 @@ type SettingsDialogProps = {
   onClose: () => void;
 };
 
-type SettingsSection = "general" | "terminal" | "security" | "transfers";
+type SettingsSection = "terminal" | "security" | "about";
 
-const sections: Array<{ id: SettingsSection; label: string; description: string }> = [
-  { id: "general", label: "常规", description: "应用信息与外观" },
-  { id: "terminal", label: "终端", description: "字体与显示行为" },
-  { id: "security", label: "安全", description: "已信任的主机密钥" },
-  { id: "transfers", label: "传输", description: "后台任务与进度" }
+const sections: Array<{ id: SettingsSection; label: string }> = [
+  { id: "terminal", label: "终端" },
+  { id: "security", label: "主机密钥" },
+  { id: "about", label: "关于" }
 ];
 
 function errorMessage(cause: unknown) {
@@ -36,8 +34,10 @@ function numberValue(value: string, fallback: number) {
 }
 
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSection>("terminal");
   const [draft, setDraft] = useState<TerminalSettingsDto>(defaultTerminalSettings);
+  const [draftReady, setDraftReady] = useState(false);
+  const [loadError, setLoadError] = useState<string>();
   const [appInfo, setAppInfo] = useState<AppInfoDto>();
   const [appInfoError, setAppInfoError] = useState<string>();
   const [saveError, setSaveError] = useState<string>();
@@ -57,8 +57,8 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const loadTerminalSettings = useSettingsStore((state) => state.loadTerminalSettings);
   const updateTerminalSettings = useSettingsStore((state) => state.updateTerminalSettings);
   const dirty = useMemo(
-    () => terminalSettingsChanged(draft, terminalSettings),
-    [draft, terminalSettings]
+    () => draftReady && terminalSettingsChanged(draft, terminalSettings),
+    [draft, draftReady, terminalSettings]
   );
   const requestClose = () => {
     if (saving) return;
@@ -86,6 +86,8 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     if (!open) return;
     setClosePrompt(false);
     setDraft(terminalSettings);
+    setDraftReady(settingsLoaded);
+    setLoadError(undefined);
     setSaveError(undefined);
     setSaved(false);
     setConfirmDeleteId(undefined);
@@ -94,17 +96,23 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     setKeysError(undefined);
 
     if (!settingsLoaded) {
-      void loadTerminalSettings().catch((cause) => setSaveError(errorMessage(cause)));
+      void loadTerminalSettings().catch((cause) => setLoadError(errorMessage(cause)));
     }
+  }, [open]);
 
+  useEffect(() => {
+    if (!open || activeSection !== "about") return;
+    let cancelled = false;
+    setAppInfoError(undefined);
     void getAppInfo()
       .then((info) => {
+        if (cancelled) return;
         setAppInfo(info);
         setAppInfoError(undefined);
       })
-      .catch((cause) => setAppInfoError(errorMessage(cause)));
-
-  }, [open]);
+      .catch((cause) => { if (!cancelled) setAppInfoError(errorMessage(cause)); });
+    return () => { cancelled = true; };
+  }, [open, activeSection]);
 
   useEffect(() => {
     if (open && activeSection === "security" && !keysLoaded && !keysLoading && !keysError) {
@@ -113,13 +121,17 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   }, [activeSection, keysError, keysLoaded, keysLoading, loadKeys, open]);
 
   useEffect(() => {
-    if (open && settingsLoaded && !dirty) setDraft(terminalSettings);
-  }, [dirty, open, settingsLoaded, terminalSettings]);
+    if (open && settingsLoaded && !draftReady) {
+      setDraft(terminalSettings);
+      setDraftReady(true);
+      setLoadError(undefined);
+    }
+  }, [draftReady, open, settingsLoaded, terminalSettings]);
 
   if (!open) return null;
 
   const applyTerminalSettings = async () => {
-    if (saving) return false;
+    if (saving || settingsLoading || !draftReady) return false;
     setSaving(true);
     setSaveError(undefined);
     setSaved(false);
@@ -162,7 +174,6 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       >
         <header className="settings-header">
           <div>
-            <span className="dialog-kicker">WMcSSH</span>
             <h2 id="settings-title">设置</h2>
           </div>
           <button
@@ -186,31 +197,38 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 className={activeSection === section.id ? "active" : undefined}
                 onClick={() => {
                   setActiveSection(section.id);
-                  setSaveError(undefined);
-                  setSaved(false);
+                  setConfirmDeleteId(undefined);
                 }}
                 aria-current={activeSection === section.id ? "page" : undefined}
               >
                 <strong>{section.label}</strong>
-                <span>{section.description}</span>
               </button>
             ))}
           </nav>
 
           <main className="settings-content">
-            {activeSection === "general" ? (
-              <GeneralSettings appInfo={appInfo} error={appInfoError} />
+            {activeSection === "about" ? (
+              <AboutSettings appInfo={appInfo} error={appInfoError} />
             ) : null}
             {activeSection === "terminal" ? (
-              <TerminalSettings
-                draft={draft}
-                disabled={settingsLoading}
-                onChange={(patch) => {
-                  setDraft((current) => ({ ...current, ...patch }));
-                  setSaveError(undefined);
-                  setSaved(false);
-                }}
-              />
+              <div className="settings-terminal-content">
+                {loadError ? <div className="settings-inline-error" role="alert">
+                  <span>{loadError}</span>
+                  <button type="button" className="ghost-button" disabled={settingsLoading} onClick={() => {
+                    setLoadError(undefined);
+                    void loadTerminalSettings().catch((cause) => setLoadError(errorMessage(cause)));
+                  }}>重试</button>
+                </div> : null}
+                <TerminalSettings
+                  draft={draft}
+                  disabled={settingsLoading || saving || !draftReady}
+                  onChange={(patch) => {
+                    setDraft((current) => ({ ...current, ...patch }));
+                    setSaveError(undefined);
+                    setSaved(false);
+                  }}
+                />
+              </div>
             ) : null}
             {activeSection === "security" ? (
               <SecuritySettings
@@ -226,42 +244,43 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 onDelete={(id) => void removeTrustedKey(id)}
               />
             ) : null}
-            {activeSection === "transfers" ? <TransferSettings /> : null}
           </main>
         </div>
 
         <footer className="settings-footer">
           <div className="settings-feedback" role="status">
             {saveError ? <span className="settings-error">{saveError}</span> : null}
-            {!saveError && saved ? <span className="settings-success">设置已应用</span> : null}
-            {!saveError && !saved && dirty ? "有未应用的更改" : null}
+            {!saveError && saved ? <span className="settings-success">已保存</span> : null}
+            {!saveError && !saved && dirty ? "有未保存的更改" : null}
+            {!saveError && !draftReady && settingsLoading ? "正在读取设置..." : null}
           </div>
           <div className="settings-footer-actions">
             {activeSection === "terminal" ? (
               <button
                 type="button"
                 className="ghost-button"
-                disabled={settingsLoading}
-                title="载入内置默认值，点击应用后保存"
+                disabled={settingsLoading || saving || !draftReady}
+                title="恢复终端默认值，保存后生效"
                 onClick={() => {
                   setDraft({ ...defaultTerminalSettings });
+                  setSaveError(undefined);
                   setSaved(false);
                 }}
               >
-                载入默认值
+                恢复默认
               </button>
             ) : null}
             <button type="button" className="ghost-button" onClick={requestClose} disabled={saving}>
-              {activeSection === "terminal" ? "取消" : "关闭"}
+              关闭
             </button>
-            {activeSection === "terminal" ? (
+            {activeSection === "terminal" || dirty ? (
               <button
                 type="button"
                 className="primary-button"
-                disabled={!dirty || settingsLoading || saving}
+                disabled={!dirty || settingsLoading || saving || !draftReady}
                 onClick={() => void applyTerminalSettings()}
               >
-                {settingsLoading ? "应用中..." : "应用"}
+                {saving ? "保存中..." : "保存并应用"}
               </button>
             ) : null}
           </div>
@@ -269,7 +288,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       </section>
       {closePrompt ? <div className="dialog-overlay settings-confirm-overlay">
         <div ref={confirmRef} className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-title">
-          <div className="dialog-body"><h3 id="unsaved-title">保存未应用的设置？</h3><p>关闭前可以保存更改，或放弃本次修改。</p>
+          <div className="dialog-body"><h3 id="unsaved-title">保存设置更改？</h3><p>更改尚未保存。</p>
             {saveError ? <p role="alert" className="dialog-error">{saveError}</p> : null}
           </div>
           <div className="dialog-footer">
@@ -282,57 +301,31 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     </div>
   );
 }
-
 function SettingsSectionHeader({ title, description, action }: {
   title: string;
-  description: string;
+  description?: string;
   action?: ReactNode;
 }) {
   return (
     <div className="settings-section-header">
       <div>
         <h3>{title}</h3>
-        <p>{description}</p>
+        {description ? <p>{description}</p> : null}
       </div>
       {action}
     </div>
   );
 }
 
-function GeneralSettings({ appInfo, error }: { appInfo?: AppInfoDto; error?: string }) {
+function AboutSettings({ appInfo, error }: { appInfo?: AppInfoDto; error?: string }) {
   return (
     <div className="settings-section">
-      <SettingsSectionHeader
-        title="常规"
-        description="查看应用版本与当前运行环境。"
-      />
+      <SettingsSectionHeader title="关于" />
       {error ? <div className="settings-inline-error">无法读取应用信息：{error}</div> : null}
-      <div className="settings-summary-grid">
-        <article className="settings-summary-card">
-          <span>应用版本</span>
-          <strong>{appInfo ? `v${appInfo.appVersion}` : "读取中..."}</strong>
-          <small>内部契约版本 {appInfo?.contractVersion ?? "—"}</small>
-        </article>
-        <article className="settings-summary-card">
-          <span>当前用户</span>
-          <strong>{appInfo?.currentUsername || "—"}</strong>
-          <small>用于快速连接的默认用户名</small>
-        </article>
-      </div>
-      <article className="settings-info-card">
-        <div>
-          <strong>应用外观</strong>
-          <span>当前版本使用统一深色主题，以保证终端与桌面窗口的一致性。</span>
-        </div>
-        <span className="settings-state-pill">深色</span>
-      </article>
-      <article className="settings-info-card">
-        <div>
-          <strong>设置保存</strong>
-          <span>终端设置保存在本机应用数据库中，不会同步到远程服务。</span>
-        </div>
-        <span className="settings-state-pill">仅本机</span>
-      </article>
+      <div className="settings-about-brand">wmcssh</div>
+      <dl className="settings-about-details">
+        <dt>版本</dt><dd>{appInfo ? `v${appInfo.appVersion}` : error ? "无法读取" : "读取中..."}</dd>
+      </dl>
     </div>
   );
 }
@@ -344,121 +337,97 @@ function TerminalSettings({ draft, disabled, onChange }: {
 }) {
   return (
     <div className="settings-section">
-      <SettingsSectionHeader
-        title="终端"
-        description="调整后应用到当前与之后打开的终端。"
-      />
-      <div className="settings-form-grid">
-        <label className="settings-field settings-field-wide">
-          <span>字体族</span>
-          <input
-            value={draft.fontFamily}
-            disabled={disabled}
-            spellCheck={false}
-            onChange={(event) => onChange({ fontFamily: event.target.value })}
-          />
-          <small>可填写 CSS 字体回退列表；留空时后端会恢复内置字体。</small>
-        </label>
-        <label className="settings-field">
-          <span>字号</span>
-          <div className="settings-number-input">
+      <SettingsSectionHeader title="终端" />
+      <fieldset className="settings-group" disabled={disabled}>
+        <legend>显示</legend>
+        <div className="settings-form-grid">
+          <label className="settings-field">
+            <span>字号</span>
+            <div className="settings-number-input">
+              <input
+                type="number"
+                min="8"
+                max="48"
+                step="1"
+                value={draft.fontSize}
+                disabled={disabled}
+                onChange={(event) => onChange({ fontSize: numberValue(event.target.value, 14) })}
+              />
+              <em aria-hidden="true">px</em>
+            </div>
+          </label>
+          <label className="settings-field">
+            <span>行高</span>
             <input
               type="number"
-              min="8"
-              max="48"
-              step="1"
-              value={draft.fontSize}
+              min="1"
+              max="2"
+              step="0.05"
+              value={draft.lineHeight}
               disabled={disabled}
-              onChange={(event) => onChange({ fontSize: numberValue(event.target.value, 14) })}
+              onChange={(event) => onChange({ lineHeight: numberValue(event.target.value, 1.2) })}
             />
-            <em>px</em>
-          </div>
-        </label>
-        <label className="settings-field">
-          <span>行高</span>
+          </label>
+        </div>
+        <label className="settings-toggle-row">
           <input
-            type="number"
-            min="1"
-            max="2"
-            step="0.05"
-            value={draft.lineHeight}
+            type="checkbox"
+            checked={draft.cursorBlink}
             disabled={disabled}
-            onChange={(event) => onChange({ lineHeight: numberValue(event.target.value, 1.2) })}
+            onChange={(event) => onChange({ cursorBlink: event.target.checked })}
           />
+          <span><strong>光标闪烁</strong></span>
         </label>
-        <label className="settings-field">
-          <span>常规字重</span>
+      </fieldset>
+      <fieldset className="settings-group" disabled={disabled}>
+        <legend>输出与历史</legend>
+        <label className="settings-toggle-row">
           <input
-            type="number"
-            min="100"
-            max="900"
-            step="100"
-            value={draft.fontWeight}
+            type="checkbox"
+            checked={draft.outputHighlight}
             disabled={disabled}
-            onChange={(event) => onChange({ fontWeight: numberValue(event.target.value, 400) })}
+            onChange={(event) => onChange({ outputHighlight: event.target.checked })}
           />
+          <span><strong>输出高亮</strong></span>
         </label>
-        <label className="settings-field">
-          <span>粗体字重</span>
-          <input
-            type="number"
-            min="100"
-            max="900"
-            step="100"
-            value={draft.fontWeightBold}
-            disabled={disabled}
-            onChange={(event) => onChange({ fontWeightBold: numberValue(event.target.value, 700) })}
-          />
-        </label>
-        <label className="settings-field">
-          <span>字间距</span>
-          <div className="settings-number-input">
-            <input
-              type="number"
-              min="-1"
-              max="1"
-              step="0.1"
-              value={draft.letterSpacing}
-              disabled={disabled}
-              onChange={(event) => onChange({ letterSpacing: numberValue(event.target.value, 0) })}
-            />
-            <em>px</em>
-          </div>
-        </label>
-        <label className="settings-field">
+        <label className="settings-field settings-history-field">
           <span>回滚行数</span>
-          <input
-            type="number"
-            min="100"
-            max="1000000"
-            step="100"
-            value={draft.scrollback}
-            disabled={disabled}
-            onChange={(event) => onChange({ scrollback: numberValue(event.target.value, 10000) })}
-          />
+          <input type="number" min="100" max="1000000" step="100" value={draft.scrollback}
+            onChange={(event) => onChange({ scrollback: numberValue(event.target.value, 10000) })} />
         </label>
-      </div>
-      <label className="settings-toggle-row">
-        <input
-          type="checkbox"
-          checked={draft.cursorBlink}
-          disabled={disabled}
-          onChange={(event) => onChange({ cursorBlink: event.target.checked })}
-        />
-        <span>
-          <strong>光标闪烁</strong>
-          <small>在当前终端与新终端中显示闪烁光标。</small>
-        </span>
-      </label>
-      <label className="settings-toggle-row">
-        <input
-          type="checkbox"
-          checked={draft.outputHighlight}
-          disabled={disabled}
-          onChange={(event) => onChange({ outputHighlight: event.target.checked })}
-        />
-        <span><strong>输出高亮</strong></span>
-      </label>
+      </fieldset>
+      <details className="settings-advanced">
+        <summary tabIndex={0}>高级字体设置</summary>
+        <fieldset className="settings-group" disabled={disabled} aria-label="高级字体设置">
+          <div className="settings-form-grid">
+            <label className="settings-field settings-field-wide">
+              <span>字体与回退列表</span>
+              <input value={draft.fontFamily} spellCheck={false}
+                onChange={(event) => onChange({ fontFamily: event.target.value })} />
+            </label>
+            <label className="settings-field">
+              <span>常规字重</span>
+              <select value={draft.fontWeight} onChange={(event) => onChange({ fontWeight: Number(event.target.value) })}>
+                {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((weight) => <option key={weight} value={weight}>{weight}</option>)}
+              </select>
+            </label>
+            <label className="settings-field">
+              <span>粗体字重</span>
+              <select value={draft.fontWeightBold} onChange={(event) => onChange({ fontWeightBold: Number(event.target.value) })}>
+                {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((weight) => <option key={weight} value={weight}>{weight}</option>)}
+              </select>
+            </label>
+            <label className="settings-field">
+              <span>字间距</span>
+              <div className="settings-number-input">
+                <input type="number" min="-1" max="1" step="0.1" value={draft.letterSpacing}
+                  onChange={(event) => onChange({ letterSpacing: numberValue(event.target.value, 0) })} />
+                <em aria-hidden="true">px</em>
+              </div>
+            </label>
+          </div>
+        </fieldset>
+      </details>
     </div>
   );
 }
@@ -551,18 +520,6 @@ function SecuritySettings({
           );
         })}
       </div>
-    </div>
-  );
-}
-
-function TransferSettings() {
-  return (
-    <div className="settings-section">
-      <SettingsSectionHeader
-        title="后台传输"
-        description="查看当前进程中的上传与下载任务。队列按文件传输会话串行执行，关闭标签后仍会继续。"
-      />
-      <TransferQueue />
     </div>
   );
 }
