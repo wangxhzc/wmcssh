@@ -34,12 +34,12 @@ pub const DIRECTORY_REPORTING_SCRIPT: &str = concat!(
     "printf '\\033]7;file://localhost/%s\\007' \"$wmcssh_path\"; return \"$wmcssh_status\"; }; ",
     // Bash before 5.1 executes only element zero of PROMPT_COMMAND. Preserve
     // scalar hooks as scalar commands; flatten existing arrays on older Bash.
-    "if [ -n \"${BASH_VERSION-}\" ]; then case \"$(declare -p PROMPT_COMMAND 2>/dev/null)\" in ",
+    "if [ -n \"${BASH_VERSION-}\" ]; then if ! [[ $(declare -p PROMPT_COMMAND 2>/dev/null) =~ ^declare\\ -[^[:space:]]*r ]]; then case \"$(declare -p PROMPT_COMMAND 2>/dev/null)\" in ",
     "'declare -a'*) if [ \"${BASH_VERSINFO[0]}\" -gt 5 ] || { [ \"${BASH_VERSINFO[0]}\" -eq 5 ] && [ \"${BASH_VERSINFO[1]}\" -ge 1 ]; }; then ",
     "PROMPT_COMMAND+=(__wmcssh_report_directory); else ",
     "printf -v __wmcssh_prompt_commands '%s\\n' \"${PROMPT_COMMAND[@]}\"; unset PROMPT_COMMAND; ",
     "PROMPT_COMMAND=\"${__wmcssh_prompt_commands}__wmcssh_report_directory\"; unset __wmcssh_prompt_commands; fi ;; ",
-    "*) PROMPT_COMMAND=\"${PROMPT_COMMAND-}\"$'\\n''__wmcssh_report_directory' ;; esac; ",
+    "*) PROMPT_COMMAND=\"${PROMPT_COMMAND-}\"$'\\n''__wmcssh_report_directory' ;; esac; fi; ",
     "elif [ -n \"${ZSH_VERSION-}\" ]; then typeset -ga precmd_functions; precmd_functions+=(__wmcssh_report_directory); fi; fi; ",
     "if [ -t 1 ]; then printf '\\r\\033[2K\\033]777;wmcssh-ready\\007'; fi; stty echo 2>/dev/null; :\n"
 );
@@ -150,6 +150,32 @@ finally:
             String::from_utf8(output.stdout).unwrap(),
             "\x1b]7;file://localhost/\x07\n42\necho first\necho second\n__wmcssh_report_directory\n"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bash_hook_skips_readonly_prompt_commands() {
+        for original in [
+            "readonly PROMPT_COMMAND=':'",
+            "PROMPT_COMMAND=(':' ':'); readonly PROMPT_COMMAND",
+            "export PROMPT_COMMAND=':'; readonly PROMPT_COMMAND",
+        ] {
+            let script = format!(
+                "{original}; before=$(declare -p PROMPT_COMMAND);\n{0}{0}[[ $(declare -p PROMPT_COMMAND) == \"$before\" ]] && eval \"${{PROMPT_COMMAND[0]}}\"",
+                DIRECTORY_REPORTING_SCRIPT
+            );
+            let output = Command::new("bash")
+                .args(["--noprofile", "--norc", "-c", &script])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{original}");
+            assert!(
+                output.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty(), "{original}");
+        }
     }
 
     #[test]

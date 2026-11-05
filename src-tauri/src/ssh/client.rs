@@ -50,7 +50,19 @@ pub fn connect_ssh_session(
     let session = connect_ssh_transport(&config.hostname, config.port, config.connect_timeout_ms)?;
     host_key_store.verify(&session, &config.hostname, config.port)?;
 
-    authenticate(&session, config)?;
+    // DNS/PAM lookups can delay authentication beyond the TCP connect timeout.
+    session.set_timeout(
+        u32::try_from(config.connect_timeout_ms)
+            .unwrap_or(u32::MAX)
+            .max(60_000),
+    );
+    let authentication = authenticate(&session, config);
+    session.set_timeout(
+        u32::try_from(config.connect_timeout_ms)
+            .unwrap_or(u32::MAX)
+            .max(1),
+    );
+    authentication?;
 
     if !session.authenticated() {
         return Err(AppErrorDto::new(
@@ -69,14 +81,7 @@ fn authenticate(session: &Session, config: &ConnectConfig) -> Result<(), AppErro
         AuthConfig::Password { password } => {
             session
                 .userauth_password(&config.username, password)
-                .map_err(|err| {
-                    AppErrorDto::with_details(
-                        AppErrorCode::AuthFailed,
-                        "Password authentication failed",
-                        err.to_string(),
-                        false,
-                    )
-                })?;
+                .map_err(|err| authentication_error(err, "Password authentication failed"))?;
         }
         AuthConfig::PrivateKey {
             private_key_path,
@@ -89,18 +94,46 @@ fn authenticate(session: &Session, config: &ConnectConfig) -> Result<(), AppErro
                     Path::new(private_key_path),
                     passphrase.as_deref(),
                 )
-                .map_err(|err| {
-                    AppErrorDto::with_details(
-                        AppErrorCode::AuthFailed,
-                        "Private key authentication failed",
-                        err.to_string(),
-                        false,
-                    )
-                })?;
+                .map_err(|err| authentication_error(err, "Private key authentication failed"))?;
         }
     }
 
     Ok(())
+}
+
+fn authentication_error(error: ssh2::Error, message: &str) -> AppErrorDto {
+    if error.code() == ssh2::ErrorCode::Session(-9) {
+        AppErrorDto::with_details(
+            AppErrorCode::Timeout,
+            "SSH 认证等待超时，请检查服务器 DNS/PAM 响应或增大连接超时时间",
+            error.to_string(),
+            true,
+        )
+    } else {
+        AppErrorDto::with_details(AppErrorCode::AuthFailed, message, error.to_string(), false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authentication_timeout_is_retryable_and_not_a_credential_rejection() {
+        let error = authentication_error(
+            ssh2::Error::new(ssh2::ErrorCode::Session(-9), "Timed out waiting on socket"),
+            "Password authentication failed",
+        );
+        assert!(matches!(error.code, AppErrorCode::Timeout));
+        assert!(error.retryable);
+
+        let rejected = authentication_error(
+            ssh2::Error::new(ssh2::ErrorCode::Session(-18), "Authentication failed"),
+            "Password authentication failed",
+        );
+        assert!(matches!(rejected.code, AppErrorCode::AuthFailed));
+        assert!(!rejected.retryable);
+    }
 }
 
 fn connect_tcp_stream(
