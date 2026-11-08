@@ -20,12 +20,12 @@ jobs:
             platform: ubuntu-22.04
             toolchain: stable-x86_64-unknown-linux-gnu
             target: x86_64-unknown-linux-gnu
-            args: --target x86_64-unknown-linux-gnu --bundles deb
+            args: --target x86_64-unknown-linux-gnu --bundles deb -- --locked
           - name: Windows amd64 (NSIS)
             platform: windows-latest
             toolchain: stable-x86_64-pc-windows-gnu
             target: x86_64-pc-windows-gnu
-            args: --target x86_64-pc-windows-gnu --bundles nsis
+            args: --target x86_64-pc-windows-gnu --bundles nsis -- --locked
 
     runs-on: ${{ matrix.platform }}
     env:
@@ -51,20 +51,24 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: mingw-w64-x86_64-gcc
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-perl make
 
       - name: Add MinGW-w64 to the Windows build PATH
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           cygpath -m /mingw64/bin >> "$GITHUB_PATH"
+          cygpath -m /usr/bin >> "$GITHUB_PATH"
+          echo "OPENSSL_SRC_PERL=$(cygpath -m /mingw64/bin/perl.exe)" >> "$GITHUB_ENV"
           gcc --version
+          /mingw64/bin/perl --version
+          make --version
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf build-essential perl
 
       - name: Install frontend dependencies
         run: npm ci

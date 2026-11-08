@@ -114,28 +114,6 @@ fn authentication_error(error: ssh2::Error, message: &str) -> AppErrorDto {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn authentication_timeout_is_retryable_and_not_a_credential_rejection() {
-        let error = authentication_error(
-            ssh2::Error::new(ssh2::ErrorCode::Session(-9), "Timed out waiting on socket"),
-            "Password authentication failed",
-        );
-        assert!(matches!(error.code, AppErrorCode::Timeout));
-        assert!(error.retryable);
-
-        let rejected = authentication_error(
-            ssh2::Error::new(ssh2::ErrorCode::Session(-18), "Authentication failed"),
-            "Password authentication failed",
-        );
-        assert!(matches!(rejected.code, AppErrorCode::AuthFailed));
-        assert!(!rejected.retryable);
-    }
-}
-
 fn connect_tcp_stream(
     hostname: &str,
     port: u16,
@@ -182,4 +160,26 @@ fn connect_tcp_stream(
         error.to_string(),
         true,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authentication_timeout_is_retryable_and_not_a_credential_rejection() {
+        let error = authentication_error(
+            ssh2::Error::new(ssh2::ErrorCode::Session(-9), "Timed out waiting on socket"),
+            "Password authentication failed",
+        );
+        assert!(matches!(error.code, AppErrorCode::Timeout));
+        assert!(error.retryable);
+
+        let rejected = authentication_error(
+            ssh2::Error::new(ssh2::ErrorCode::Session(-18), "Authentication failed"),
+            "Password authentication failed",
+        );
+        assert!(matches!(rejected.code, AppErrorCode::AuthFailed));
+        assert!(!rejected.retryable);
+    }
 }
