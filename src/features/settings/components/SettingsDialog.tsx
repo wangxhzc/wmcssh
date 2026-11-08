@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { getAppInfo, type AppInfoDto } from "../../../services/tauri/settingsApi";
 import { deleteTrustedHostKey, listTrustedHostKeys } from "../../../services/tauri/sshApi";
 import { useSettingsStore } from "../../../stores/settingsStore";
+import { useTerminalStore } from "../../../stores/terminalStore";
 import { defaultTerminalSettings, type TerminalSettingsDto } from "../../../types/settings";
 import type { TrustedHostKey } from "../../../types/ssh";
 import { normalizeTerminalSettings, terminalSettingsChanged } from "../terminalSettingsDraft";
@@ -52,6 +53,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [closePrompt, setClosePrompt] = useState(false);
   const [saving, setSaving] = useState(false);
   const terminalSettings = useSettingsStore((state) => state.terminalSettings);
+  const highlightUnavailable = useTerminalStore((state) =>
+    state.tabs.some((tab) => tab.kind === "terminal" && tab.renderer === "dom") &&
+    !state.tabs.some((tab) => tab.kind === "terminal" && tab.renderer === "webgl"));
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const settingsLoading = useSettingsStore((state) => state.loading);
   const loadTerminalSettings = useSettingsStore((state) => state.loadTerminalSettings);
@@ -221,6 +225,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 </div> : null}
                 <TerminalSettings
                   draft={draft}
+                  highlightUnavailable={highlightUnavailable}
                   disabled={settingsLoading || saving || !draftReady}
                   onChange={(patch) => {
                     setDraft((current) => ({ ...current, ...patch }));
@@ -330,9 +335,10 @@ function AboutSettings({ appInfo, error }: { appInfo?: AppInfoDto; error?: strin
   );
 }
 
-function TerminalSettings({ draft, disabled, onChange }: {
+function TerminalSettings({ draft, disabled, highlightUnavailable, onChange }: {
   draft: TerminalSettingsDto;
   disabled: boolean;
+  highlightUnavailable: boolean;
   onChange: (patch: Partial<TerminalSettingsDto>) => void;
 }) {
   return (
@@ -384,11 +390,11 @@ function TerminalSettings({ draft, disabled, onChange }: {
         <label className="settings-toggle-row">
           <input
             type="checkbox"
-            checked={draft.outputHighlight}
-            disabled={disabled}
+            checked={draft.outputHighlight && !highlightUnavailable}
+            disabled={disabled || highlightUnavailable}
             onChange={(event) => onChange({ outputHighlight: event.target.checked })}
           />
-          <span><strong>输出高亮</strong></span>
+          <span title={highlightUnavailable ? "当前图形环境不支持输出高亮" : undefined}><strong>输出高亮{highlightUnavailable ? "（当前不可用）" : ""}</strong></span>
         </label>
         <label className="settings-field settings-history-field">
           <span>回滚行数</span>

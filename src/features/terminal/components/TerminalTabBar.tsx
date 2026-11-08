@@ -9,6 +9,7 @@ import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
 import { sessionStatusLabel } from "../sessionStatusLabel";
 import type { SessionStatus } from "../../../types/ssh";
 import { useTabReorder } from "../useTabReorder";
+import { focusTerminal } from "../terminalFocus";
 
 type TabMenuState = {
   tabId: string;
@@ -109,19 +110,24 @@ export function TerminalTabBar() {
       if (event.key === "Escape") {
         closeTabMenu();
         setTabListOpen(false);
+        if (activeTabId) focusTerminal(activeTabId);
       }
     };
 
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKeyDown);
+    const onBlur = () => { closeTabMenu(); setTabListOpen(false); };
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [tabListOpen, tabMenu]);
+  }, [tabListOpen, tabMenu, activeTabId]);
 
   const activateTab = (tabId: string) => {
     setActiveTab(tabId);
+    focusTerminal(tabId);
     requestAnimationFrame(() => {
       tabStripRef.current
         ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tabId)}"]`)
@@ -192,6 +198,7 @@ export function TerminalTabBar() {
               onClick={(event) => {
                 event.stopPropagation();
                 if (reorder.suppressClick()) return;
+                if (activeTabId && activeTabId !== tab.tabId) focusTerminal(activeTabId);
                 void closeWorkspaceTab(tab.tabId);
               }}
             >
@@ -276,6 +283,7 @@ export function TerminalTabBar() {
             onClick={async () => {
               if (!menuTab) return;
               closeTabMenu();
+              focusTerminal(menuTab.tabId);
               await closeOtherTabs(menuTab.tabId);
             }}
           >

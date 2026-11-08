@@ -58,6 +58,7 @@ export function HostSidebar() {
 
   useEffect(() => {
     if (!hostMenu) return;
+    const previous = document.activeElement as HTMLElement | null;
     hostMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -65,7 +66,10 @@ export function HostSidebar() {
       setHostMenu(null);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setHostMenu(null);
+      if (event.key === "Escape") {
+        setHostMenu(null);
+        if (previous?.isConnected && previous.getClientRects().length) previous.focus();
+      }
     };
     const handleWindowBlur = () => setHostMenu(null);
 

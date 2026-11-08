@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useTerminalNoticeStore } from "../../../stores/terminalNoticeStore";
 import { useTerminalStore } from "../../../stores/terminalStore";
+import { focusTerminal } from "../terminalFocus";
 
 export function TerminalNotifications() {
   const notices = useTerminalNoticeStore((state) => state.notices);
@@ -14,6 +15,7 @@ export function TerminalNotifications() {
       <button className="terminal-notification-content" onClick={() => {
         const store = useTerminalStore.getState();
         if (store.tabs.some((tab) => tab.tabId === notice.tabId)) store.setActiveTab(notice.tabId);
+        focusTerminal(notice.tabId);
         dismiss(notice.id);
       }}>
         <span className="terminal-notification-source">{notice.source}</span>

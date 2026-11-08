@@ -10,6 +10,9 @@ import { queueTerminalInput } from "../actions";
 import { useAnchoredMenuPosition } from "../../../app/useAnchoredMenuPosition";
 import { PastePreviewDialog } from "./PastePreviewDialog";
 import { createPasteRequest } from "../pasteRequest";
+import { focusTerminal } from "../terminalFocus";
+import { installTerminalRenderer } from "../terminalRenderer";
+import { useTerminalStore } from "../../../stores/terminalStore";
 
 export type TerminalViewProps = {
   tabId: string;
@@ -66,12 +69,6 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
 
   useEffect(() => { closePastePreview(); }, [active, sessionId]);
 
-  const focusTerminal = () => {
-    requestAnimationFrame(() => {
-      terminalRegistry.get(tabId)?.terminal.focus();
-    });
-  };
-
   useLayoutEffect(() => {
     let runtime = terminalRegistry.get(tabId);
 
@@ -84,7 +81,12 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
     }
 
     runtime.terminal.open(containerRef.current);
-    runtime.terminal.focus();
+    runtime.disposables.push(installTerminalRenderer(runtime.terminal,
+      (accelerated) => {
+        runtime.outputHighlighter.setAcceleratedRendering(accelerated);
+        useTerminalStore.getState().setTerminalMetadata(tabId, { renderer: accelerated ? "webgl" : "dom" });
+      }));
+    if (activeRef.current) focusTerminal(tabId);
     runtime.mounted = true;
     terminalRegistry.flush(tabId);
     console.debug("[wmcssh][terminal] mounted", { tabId });
@@ -330,8 +332,7 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
 
   useEffect(() => {
     if (active) {
-      const runtime = terminalRegistry.get(tabId);
-      runtime?.terminal.focus();
+      focusTerminal(tabId);
       console.debug("[wmcssh][terminal] focus", { tabId });
     }
   }, [active, tabId]);
@@ -381,12 +382,16 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
       }
     };
 
+    const handleBlur = () => closeContextMenu();
+
     window.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("blur", handleBlur);
 
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("blur", handleBlur);
     };
   }, [contextMenu]);
 
@@ -459,14 +464,14 @@ function TerminalSurface({ tabId, sessionId, active }: TerminalViewProps) {
             type="button"
             onClick={async () => {
               closeContextMenu();
-              try {
-                const text = await readText();
-                if (text) {
-                  const current = terminalRegistry.get(tabId);
-                  if (current) requestPaste(text, current);
-                }
-              } finally {
-                focusTerminal();
+              const origin = document.activeElement;
+              const originalRuntime = terminalRegistry.get(tabId);
+              const originalSession = originalRuntime?.sessionId;
+              const text = await readText();
+              if (document.activeElement !== origin || !document.hasFocus()) return;
+              const current = terminalRegistry.get(tabId);
+              if (text && current && current === originalRuntime && current.sessionId === originalSession) {
+                requestPaste(text, current);
               }
             }}
           >

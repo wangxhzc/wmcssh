@@ -28,7 +28,7 @@ fn supported_shell(output: &str) -> bool {
 // With echo disabled the initial prompt is still on the cursor line. Erase only
 // that line before the shell redraws its prompt, preserving the login banner.
 pub const DIRECTORY_REPORTING_SCRIPT: &str = concat!(
-    " export COLORTERM=truecolor; if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ] && ! typeset -f __wmcssh_report_directory >/dev/null 2>&1; then ",
+    " __wmcssh_bootstrap=1; export COLORTERM=truecolor; if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ] && ! typeset -f __wmcssh_report_directory >/dev/null 2>&1; then ",
     "__wmcssh_report_directory() { local wmcssh_status=$?; local wmcssh_path; ",
     "wmcssh_path=$(printf '%s' \"${PWD#/}\" | od -An -v -tx1 | tr -d ' \\n' | sed 's/../%&/g'); ",
     "printf '\\033]7;file://localhost/%s\\007' \"$wmcssh_path\"; return \"$wmcssh_status\"; }; ",
@@ -41,6 +41,13 @@ pub const DIRECTORY_REPORTING_SCRIPT: &str = concat!(
     "PROMPT_COMMAND=\"${__wmcssh_prompt_commands}__wmcssh_report_directory\"; unset __wmcssh_prompt_commands; fi ;; ",
     "*) PROMPT_COMMAND=\"${PROMPT_COMMAND-}\"$'\\n''__wmcssh_report_directory' ;; esac; fi; ",
     "elif [ -n \"${ZSH_VERSION-}\" ]; then typeset -ga precmd_functions; precmd_functions+=(__wmcssh_report_directory); fi; fi; ",
+    // Bash records input before executing it. A leading space alone only works
+    // with ignorespace; remove only our marked bootstrap, never the user's entry.
+    "if [ -n \"${BASH_VERSION-}\" ]; then __wmcssh_history_entry=$(HISTTIMEFORMAT= builtin history 1); ",
+    "if [[ $__wmcssh_history_entry == *' __wmcssh_bootstrap=1; export COLORTERM=truecolor;'* ]]; then ",
+    "__wmcssh_history_id=${__wmcssh_history_entry%%[![:space:]0-9]*}; ",
+    "builtin history -d \"${__wmcssh_history_id//[[:space:]]/}\" 2>/dev/null; fi; ",
+    "unset __wmcssh_history_entry __wmcssh_history_id; fi; unset __wmcssh_bootstrap; ",
     "if [ -t 1 ]; then printf '\\r\\033[2K\\033]777;wmcssh-ready\\007'; fi; stty echo 2>/dev/null; :\n"
 );
 
@@ -115,6 +122,64 @@ finally:
         assert!(supported_shell("wmcssh-shell:/usr/bin/zsh\n"));
         assert!(!supported_shell("wmcssh-shell:/bin/fish\n"));
         assert!(!supported_shell("wmcssh-shell:$SHELL\n"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn interactive_bash_bootstrap_keeps_user_history_without_requiring_ignorespace() {
+        let output = Command::new("python3")
+            .args([
+                "-c",
+                r#"
+import os, pty, select, sys, tempfile, time
+for control, ignore in [('', ''), ('ignoredups', ''), ('ignorespace', ''), ('ignoreboth', ''), ('', '*__wmcssh_bootstrap*')]:
+    with tempfile.TemporaryDirectory() as directory:
+        history = os.path.join(directory, 'history')
+        with open(history, 'w') as stream:
+            stream.write('echo saved-user-entry\n')
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.environ.update(PS1='wmcssh-history> ', HISTFILE=history, HISTCONTROL=control, HISTIGNORE=ignore)
+            os.execvp('bash', ['bash', '--noprofile', '--norc', '-i'])
+        def read_prompt():
+            data = b''
+            deadline = time.monotonic() + 5
+            while not data.endswith(b'wmcssh-history> '):
+                assert time.monotonic() < deadline, repr(data)
+                if select.select([fd], [], [], 0.1)[0]:
+                    data += os.read(fd, 65536)
+            return data
+        try:
+            read_prompt()
+            # Repeated initialization must neither accumulate commands nor erase
+            # the user's last entry when shell history already ignores our line.
+            for _ in range(2):
+                os.write(fd, sys.argv[1].encode())
+                read_prompt()
+            os.write(fd, b'echo new-user-entry\n')
+            read_prompt()
+            os.write(fd, b'builtin history -w\n')
+            read_prompt()
+            with open(history) as stream:
+                contents = stream.read()
+            assert 'echo saved-user-entry' in contents, (control, ignore, contents)
+            assert 'echo new-user-entry' in contents, (control, ignore, contents)
+            assert '__wmcssh_bootstrap' not in contents, (control, ignore, contents)
+            assert '__wmcssh_report_directory' not in contents, (control, ignore, contents)
+        finally:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+            os.close(fd)
+"#,
+                DIRECTORY_REPORTING_SCRIPT,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

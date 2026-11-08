@@ -225,6 +225,7 @@ function sameSpans(left: HighlightSpan[], right: HighlightSpan[]) {
 
 export class OutputHighlighter {
   private enabled = false;
+  private requestedEnabled = false;
   private disposed = false;
   private pending = false;
   private rows: HighlightedRow[] = [];
@@ -232,6 +233,7 @@ export class OutputHighlighter {
   private subscriptions: IDisposable[];
   private terminal: Terminal;
   private viewport?: HTMLElement;
+  private acceleratedRendering = false;
   private lastViewportY = -1;
   private handleViewportScroll = () => this.schedule();
 
@@ -252,7 +254,20 @@ export class OutputHighlighter {
   }
 
   setEnabled(enabled: boolean) {
-    if (this.disposed || this.enabled === enabled) return;
+    if (this.disposed) return;
+    this.requestedEnabled = enabled;
+    this.updateEnabled();
+  }
+
+  setAcceleratedRendering(accelerated: boolean) {
+    if (this.disposed || this.acceleratedRendering === accelerated) return;
+    this.acceleratedRendering = accelerated;
+    this.updateEnabled();
+  }
+
+  private updateEnabled() {
+    const enabled = this.requestedEnabled && this.acceleratedRendering;
+    if (this.enabled === enabled) return;
     this.enabled = enabled;
     this.attachViewport();
     this.invalidate();

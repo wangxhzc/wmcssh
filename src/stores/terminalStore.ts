@@ -21,6 +21,7 @@ export type TerminalTab = WorkspaceTabBase & {
   port: number;
   remoteTitle?: string;
   currentDirectory?: string;
+  renderer?: "webgl" | "dom";
   sessionId?: SessionId;
   status: TabStatus;
   errorMessage?: string;
@@ -41,7 +42,7 @@ type TerminalStore = {
   activeTabId?: TabId;
   createTerminalTab: (input: { hostId: HostId; title: string; port: number; afterTabId?: TabId }) => TabId;
   createFileTransferTab: (input: { hostId: HostId; title: string; afterTabId?: TabId; initialPath?: string }) => TabId;
-  setTerminalMetadata: (tabId: TabId, metadata: { remoteTitle?: string; currentDirectory?: string }) => void;
+  setTerminalMetadata: (tabId: TabId, metadata: { remoteTitle?: string; currentDirectory?: string; renderer?: "webgl" | "dom" }) => void;
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
   bindFileTransferSession: (tabId: TabId, transferSessionId: SessionId) => void;
   replaceSession: (tabId: TabId, newSessionId: SessionId) => void;

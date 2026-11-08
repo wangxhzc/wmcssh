@@ -51,6 +51,7 @@ test("defaults off, clears decorations when disabled and skips alternate screen"
   let disposed = 0;
   terminal.registerDecoration = () => { created++; return { dispose() { disposed++; } }; };
   const highlighter = new OutputHighlighter(terminal);
+  highlighter.setAcceleratedRendering(true);
   t.after(() => highlighter.dispose());
   const settle = () => new Promise((resolve) => setTimeout(resolve, 110));
   await settle();
@@ -171,6 +172,7 @@ test("new prompts are decorated during parsed-output notification without a time
   let created = 0;
   terminal.registerDecoration = () => { created++; return { dispose() {} }; };
   const highlighter = new OutputHighlighter(terminal);
+  highlighter.setAcceleratedRendering(true);
   t.after(() => highlighter.dispose());
   highlighter.setEnabled(true);
   assert.equal(created, 3);
@@ -189,6 +191,7 @@ test("decoration cap prioritizes the latest prompt in dense output", async (t) =
   const decorations = [];
   terminal.registerDecoration = (options) => { decorations.push(options); return { dispose() {} }; };
   const highlighter = new OutputHighlighter(terminal);
+  highlighter.setAcceleratedRendering(true);
   t.after(() => highlighter.dispose());
   highlighter.setEnabled(true);
   assert.equal(decorations.length, 300);
@@ -204,10 +207,13 @@ test("native viewport scroll refreshes history when xterm suppresses onScroll", 
     removeEventListener(...args) { super.removeEventListener(...args); this.listeners--; }
   }
   const viewport = new Viewport();
-  Object.defineProperty(terminal, "element", { value: { querySelector: () => viewport } });
+  const element = new EventTarget();
+  element.querySelector = () => viewport;
+  Object.defineProperty(terminal, "element", { value: element });
   const decorations = [];
   terminal.registerDecoration = (options) => { decorations.push(options); return { dispose() {} }; };
   const highlighter = new OutputHighlighter(terminal);
+  highlighter.setAcceleratedRendering(true);
   t.after(() => highlighter.dispose());
   highlighter.setEnabled(true);
   assert.equal(viewport.listeners, 1);
@@ -233,6 +239,7 @@ test("coalesces per-line scroll notifications and shares one marker per highligh
   terminal.registerMarker = (...args) => { markers++; return registerMarker(...args); };
   terminal.registerDecoration = () => { created++; return { dispose() {} }; };
   const highlighter = new OutputHighlighter(terminal);
+  highlighter.setAcceleratedRendering(true);
   t.after(() => highlighter.dispose());
   highlighter.setEnabled(true);
   let updates = 0;
@@ -251,6 +258,7 @@ test("reuses unchanged visible rows during scrolling and invalidates cached ANSI
   let removed = 0;
   terminal.registerDecoration = () => { created++; return { dispose() { removed++; } }; };
   const highlighter = new OutputHighlighter(terminal);
+  highlighter.setAcceleratedRendering(true);
   t.after(() => highlighter.dispose());
   highlighter.setEnabled(true);
   const initial = created;
@@ -269,4 +277,59 @@ test("reuses unchanged visible rows during scrolling and invalidates cached ANSI
   assert.equal(created, beforeStyleChange);
   assert.ok(removed >= 3);
   assert.ok(highlighter.cache.size <= 256);
+});
+
+function selectionSurface(terminal) {
+  const element = new EventTarget();
+  element.querySelector = () => null;
+  Object.defineProperty(terminal, "element", { value: element });
+  const event = new Event("mousedown");
+  Object.assign(event, { button: 0, shiftKey: false });
+  return { element, event };
+}
+
+test("WebGL keeps new history rows colored while the mouse is held down", async (t) => {
+  const terminal = await terminalWith(t, "ERROR 10.0.240.233 /var/log/app.log\r\n".repeat(100));
+  const { element, event } = selectionSurface(terminal);
+  terminal.registerDecoration = () => ({ dispose() {} });
+  const highlighter = new OutputHighlighter(terminal);
+  t.after(() => highlighter.dispose());
+  highlighter.setEnabled(true);
+  highlighter.setAcceleratedRendering(true);
+  const initialRows = [...highlighter.rows];
+  element.dispatchEvent(event);
+  assert.ok(highlighter.rows.every((row, index) => row === initialRows[index]));
+  terminal._core._bufferService.scrollLines(-20, false);
+  await Promise.resolve();
+  assert.ok(highlighter.rows.some(row => row.marker.line === terminal.buffer.active.viewportY));
+});
+
+test("unsupported WebGL blocks highlighting and context loss removes existing decorations", async (t) => {
+  const terminal = await terminalWith(t, "ERROR 10.0.240.233 /var/log/app.log\r\n".repeat(100));
+  let decorations = 0;
+  terminal.registerDecoration = () => {
+    decorations++;
+    return { dispose() { decorations--; } };
+  };
+  const highlighter = new OutputHighlighter(terminal);
+  t.after(() => highlighter.dispose());
+  highlighter.setEnabled(true);
+  assert.equal(decorations, 0);
+  await new Promise(resolve => terminal.write("ERROR no GPU\r\n", resolve));
+  assert.equal(decorations, 0);
+  highlighter.setAcceleratedRendering(true);
+  assert.ok(decorations > 0);
+  highlighter.setAcceleratedRendering(false);
+  assert.equal(decorations, 0);
+  assert.equal(terminal.markers.length, 0);
+  highlighter.setEnabled(true);
+  terminal._core._bufferService.scrollLines(-20, false);
+  await Promise.resolve();
+  assert.equal(decorations, 0);
+  highlighter.setAcceleratedRendering(true);
+  assert.ok(decorations > 0);
+  highlighter.setEnabled(false);
+  highlighter.setAcceleratedRendering(false);
+  highlighter.setAcceleratedRendering(true);
+  assert.equal(decorations, 0);
 });
