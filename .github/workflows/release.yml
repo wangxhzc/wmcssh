@@ -51,7 +51,7 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-perl make
+          install: mingw-w64-x86_64-gcc perl make
 
       - name: Add MinGW-w64 to the Windows build PATH
         if: runner.os == 'Windows'
@@ -59,9 +59,9 @@ jobs:
         run: |
           cygpath -m /mingw64/bin >> "$GITHUB_PATH"
           cygpath -m /usr/bin >> "$GITHUB_PATH"
-          echo "OPENSSL_SRC_PERL=$(cygpath -m /mingw64/bin/perl.exe)" >> "$GITHUB_ENV"
+          echo "OPENSSL_SRC_PERL=$(cygpath -m /usr/bin/perl.exe)" >> "$GITHUB_ENV"
           gcc --version
-          /mingw64/bin/perl --version
+          /usr/bin/perl --version
           make --version
 
       - name: Install Linux build dependencies
