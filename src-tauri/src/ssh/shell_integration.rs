@@ -43,10 +43,13 @@ pub const DIRECTORY_REPORTING_SCRIPT: &str = concat!(
     "elif [ -n \"${ZSH_VERSION-}\" ]; then typeset -ga precmd_functions; precmd_functions+=(__wmcssh_report_directory); fi; fi; ",
     // Bash records input before executing it. A leading space alone only works
     // with ignorespace; remove only our marked bootstrap, never the user's entry.
-    "if [ -n \"${BASH_VERSION-}\" ]; then __wmcssh_history_entry=$(HISTTIMEFORMAT= builtin history 1); ",
+    // The history number precedes the timestamp even with a custom format.
+    // Leave HISTTIMEFORMAT untouched: hardened servers may make it readonly.
+    "if [ -n \"${BASH_VERSION-}\" ]; then __wmcssh_history_entry=$(builtin history 1); ",
     "if [[ $__wmcssh_history_entry == *' __wmcssh_bootstrap=1; export COLORTERM=truecolor;'* ]]; then ",
-    "__wmcssh_history_id=${__wmcssh_history_entry%%[![:space:]0-9]*}; ",
-    "builtin history -d \"${__wmcssh_history_id//[[:space:]]/}\" 2>/dev/null; fi; ",
+    "__wmcssh_history_id=${__wmcssh_history_entry#\"${__wmcssh_history_entry%%[![:space:]]*}\"}; ",
+    "__wmcssh_history_id=${__wmcssh_history_id%%[!0-9]*}; ",
+    "builtin history -d \"$__wmcssh_history_id\" 2>/dev/null; fi; ",
     "unset __wmcssh_history_entry __wmcssh_history_id; fi; unset __wmcssh_bootstrap; ",
     "if [ -t 1 ]; then printf '\\r\\033[2K\\033]777;wmcssh-ready\\007'; fi; stty echo 2>/dev/null; :\n"
 );
@@ -132,7 +135,9 @@ finally:
                 "-c",
                 r#"
 import os, pty, select, sys, tempfile, time
-for control, ignore in [('', ''), ('ignoredups', ''), ('ignorespace', ''), ('ignoreboth', ''), ('', '*__wmcssh_bootstrap*')]:
+cases = [(control, ignore, None) for control, ignore in [('', ''), ('ignoredups', ''), ('ignorespace', ''), ('ignoreboth', ''), ('', '*__wmcssh_bootstrap*')]]
+cases += [('', '', value) for value in ['', '%F %T ', '123 %s ', '%F\n%T ']]
+for control, ignore, time_format in cases:
     with tempfile.TemporaryDirectory() as directory:
         history = os.path.join(directory, 'history')
         with open(history, 'w') as stream:
@@ -151,11 +156,21 @@ for control, ignore in [('', ''), ('ignoredups', ''), ('ignorespace', ''), ('ign
             return data
         try:
             read_prompt()
+            if time_format is not None:
+                import shlex
+                setup = 'readonly HISTTIMEFORMAT=' + shlex.quote(time_format) + '\n'
+                os.write(fd, setup.encode())
+                read_prompt()
             # Repeated initialization must neither accumulate commands nor erase
             # the user's last entry when shell history already ignores our line.
             for _ in range(2):
                 os.write(fd, sys.argv[1].encode())
-                read_prompt()
+                result = read_prompt()
+                assert b'readonly variable' not in result, repr(result)
+            if time_format is not None:
+                os.write(fd, b'declare -p HISTTIMEFORMAT\n')
+                result = read_prompt()
+                assert b'declare -r' in result, repr(result)
             os.write(fd, b'echo new-user-entry\n')
             read_prompt()
             os.write(fd, b'builtin history -w\n')
