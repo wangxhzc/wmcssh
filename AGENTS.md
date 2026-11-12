@@ -43,7 +43,7 @@ Preserve the current architectural boundaries:
 
 Rust tests live both in `src-tauri/src/tests.rs` and alongside their modules. Add focused tests near backend service, repository, contract, migration, and parser changes. Run `cargo test` before backend PRs and `npm run build` before frontend PRs.
 
-No frontend test runner is currently configured. Validate affected desktop flows with `npm run tauri dev`, especially the custom title bar, quick connect, context-menu focus behavior, terminal input/output and resize, vault lock/unlock, and recursive file transfers. Record manual coverage in the PR.
+Frontend logic tests use Node's built-in test runner through `npm test`. Run them for affected TypeScript logic, then validate desktop flows with `npm run tauri dev`, especially the custom title bar, quick connect, context-menu focus behavior, terminal input/output and resize, vault lock/unlock, and recursive file transfers. Record manual coverage in the PR.
 
 ## Commit & Pull Request Guidelines
 
