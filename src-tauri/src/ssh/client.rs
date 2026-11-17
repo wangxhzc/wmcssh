@@ -3,7 +3,7 @@ use crate::ssh::host_key::HostKeyStore;
 use crate::ssh::types::{AuthConfig, ConnectConfig};
 use ssh2::Session;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub fn connect_ssh_transport(
@@ -87,11 +87,12 @@ fn authenticate(session: &Session, config: &ConnectConfig) -> Result<(), AppErro
             private_key_path,
             passphrase,
         } => {
+            let private_key_path = expand_private_key_path(private_key_path, std::env::home_dir)?;
             session
                 .userauth_pubkey_file(
                     &config.username,
                     None,
-                    Path::new(private_key_path),
+                    &private_key_path,
                     passphrase.as_deref(),
                 )
                 .map_err(|err| authentication_error(err, "Private key authentication failed"))?;
@@ -99,6 +100,27 @@ fn authenticate(session: &Session, config: &ConnectConfig) -> Result<(), AppErro
     }
 
     Ok(())
+}
+
+fn expand_private_key_path(
+    path: &str,
+    home_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Result<PathBuf, AppErrorDto> {
+    if path == "~" || path.starts_with("~/") || (cfg!(windows) && path.starts_with("~\\")) {
+        let home = home_dir().ok_or_else(|| {
+            AppErrorDto::new(
+                AppErrorCode::IoError,
+                "无法获取本机用户目录，请使用私钥绝对路径",
+                false,
+            )
+        })?;
+        // Append separators as part of the suffix so joining cannot replace the home path.
+        let mut expanded = home.into_os_string();
+        expanded.push(&path[1..]);
+        Ok(PathBuf::from(expanded))
+    } else {
+        Ok(PathBuf::from(path))
+    }
 }
 
 fn authentication_error(error: ssh2::Error, message: &str) -> AppErrorDto {
@@ -165,6 +187,49 @@ fn connect_tcp_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_key_paths_expand_current_user_home() {
+        let home = std::env::temp_dir().join("wmcssh home");
+        for (path, suffix) in [
+            ("~", ""),
+            ("~/.ssh/id_rsa", ".ssh/id_rsa"),
+            ("~/密钥/id ed25519", "密钥/id ed25519"),
+        ] {
+            assert_eq!(
+                expand_private_key_path(path, || Some(home.clone())).unwrap(),
+                home.join(suffix)
+            );
+        }
+        #[cfg(windows)]
+        assert_eq!(
+            expand_private_key_path("~\\.ssh\\id_rsa", || Some(home.clone())).unwrap(),
+            home.join(".ssh\\id_rsa")
+        );
+    }
+
+    #[test]
+    fn private_key_paths_preserve_other_path_forms() {
+        for path in [
+            "/tmp/id_rsa",
+            "C:\\keys\\id_rsa",
+            ".ssh/id_rsa",
+            "~other/.ssh/id_rsa",
+            "keys/~/id_rsa",
+            "",
+        ] {
+            assert_eq!(
+                expand_private_key_path(path, || panic!("home lookup is unnecessary")).unwrap(),
+                PathBuf::from(path)
+            );
+        }
+    }
+
+    #[test]
+    fn private_key_home_expansion_reports_missing_home() {
+        let error = expand_private_key_path("~/.ssh/id_rsa", || None).unwrap_err();
+        assert!(matches!(error.code, AppErrorCode::IoError));
+    }
 
     #[test]
     fn authentication_timeout_is_retryable_and_not_a_credential_rejection() {
