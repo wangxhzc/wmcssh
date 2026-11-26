@@ -2224,7 +2224,8 @@ textarea::placeholder {
 }
 
 .transfer-queue.compact .transfer-task-list {
-  overflow: auto;
+  grid-auto-rows: max-content;
+  overflow-y: auto;
 }
 
 .transfer-task {
