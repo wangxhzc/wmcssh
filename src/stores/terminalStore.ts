@@ -21,6 +21,7 @@ export type TerminalTab = WorkspaceTabBase & {
   port: number;
   remoteTitle?: string;
   currentDirectory?: string;
+  unreadPrompt?: boolean;
   renderer?: "webgl" | "dom";
   sessionId?: SessionId;
   status: TabStatus;
@@ -43,6 +44,7 @@ type TerminalStore = {
   createTerminalTab: (input: { hostId: HostId; title: string; port: number; afterTabId?: TabId }) => TabId;
   createFileTransferTab: (input: { hostId: HostId; title: string; afterTabId?: TabId; initialPath?: string }) => TabId;
   setTerminalMetadata: (tabId: TabId, metadata: { remoteTitle?: string; currentDirectory?: string; renderer?: "webgl" | "dom" }) => void;
+  reportTerminalPrompt: (tabId: TabId, currentDirectory: string) => void;
   bindSession: (tabId: TabId, sessionId: SessionId) => void;
   bindFileTransferSession: (tabId: TabId, transferSessionId: SessionId) => void;
   replaceSession: (tabId: TabId, newSessionId: SessionId) => void;
@@ -117,10 +119,21 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     ) }));
   },
 
+  reportTerminalPrompt(tabId, currentDirectory) {
+    set((state) => {
+      const tab = state.tabs.find((item) => item.tabId === tabId);
+      if (tab?.kind !== "terminal") return state;
+      const unreadPrompt = state.activeTabId !== tabId && tab.status === "connected" &&
+        (tab.unreadPrompt || tab.currentDirectory !== undefined);
+      if (tab.currentDirectory === currentDirectory && Boolean(tab.unreadPrompt) === unreadPrompt) return state;
+      return { tabs: state.tabs.map((item) => item === tab ? { ...tab, currentDirectory, unreadPrompt } : item) };
+    });
+  },
+
   bindSession(tabId, sessionId) {
     set((state) => ({
       tabs: state.tabs.map((tab) =>
-        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, sessionId, remoteTitle: undefined, currentDirectory: undefined } : tab
+        tab.tabId === tabId && tab.kind === "terminal" ? { ...tab, sessionId, remoteTitle: undefined, currentDirectory: undefined, unreadPrompt: false } : tab
       )
     }));
   },
@@ -149,7 +162,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set((state) => ({
       activeTabId: tabId,
       tabs: state.tabs.map((tab) =>
-        tab.tabId === tabId ? { ...tab, lastActiveAt: Date.now() } : tab
+        tab.tabId === tabId ? {
+          ...tab,
+          lastActiveAt: Date.now(),
+          ...(tab.kind === "terminal" ? { unreadPrompt: false } : {})
+        } : tab
       )
     }));
   },
@@ -178,7 +195,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const tabs = state.tabs.filter((tab) => tab.tabId !== tabId);
       const activeTabId =
         state.activeTabId === tabId ? tabs[tabs.length - 1]?.tabId : state.activeTabId;
-      return { tabs, activeTabId };
+      return {
+        tabs: tabs.map((tab) => tab.tabId === activeTabId && tab.kind === "terminal" && tab.unreadPrompt
+          ? { ...tab, unreadPrompt: false }
+          : tab),
+        activeTabId
+      };
     });
   },
 

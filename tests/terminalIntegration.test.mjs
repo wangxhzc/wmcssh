@@ -22,7 +22,12 @@ test("terminal integration registers title, directory and notification handlers 
   const notices = [];
   const opened = [];
   let attention = 0;
-  const store = { tabs: [{ tabId: "tab", title: "server" }], setTerminalMetadata: (...args) => metadata.push(args) };
+  const prompts = [];
+  const store = {
+    tabs: [{ tabId: "tab", title: "server" }],
+    setTerminalMetadata: (...args) => metadata.push(args),
+    reportTerminalPrompt: (...args) => prompts.push(args)
+  };
   const integration = load("../src/features/terminal/terminalIntegration.ts", {
     ...protocol,
     useTerminalStore: { getState: () => store },
@@ -37,9 +42,9 @@ test("terminal integration registers title, directory and notification handlers 
   titleHandler("\x07task");
   handlers.get(7)("file://remote/home/me");
   assert.equal(metadata[0][1].remoteTitle, "task");
-  assert.equal(metadata[1][1].currentDirectory, "/home/me");
+  assert.deepEqual(prompts, [["tab", "/home/me"]]);
   handlers.get(7)("https://example.com");
-  assert.equal(metadata.length, 2);
+  assert.equal(prompts.length, 1);
   handlers.get(777)("notify;Codex;done");
   assert.equal(notices[0].source, "server");
   assert.equal(notices[0].body, "done");
@@ -57,6 +62,34 @@ test("terminal integration registers title, directory and notification handlers 
   assert.equal(notices.length, 1);
   registration.dispose();
   assert.equal(disposed, 4);
+});
+
+test("a background terminal marks subsequent prompts as unread until activated or rebound", () => {
+  let nextId = 0;
+  const { useTerminalStore } = load("../src/stores/terminalStore.ts", { create }, {
+    crypto: { randomUUID: () => String(++nextId) }
+  });
+  const store = useTerminalStore.getState();
+  const first = store.createTerminalTab({ hostId: "host", title: "first", port: 22 });
+  const second = store.createTerminalTab({ hostId: "host", title: "second", port: 22 });
+  const unread = () => useTerminalStore.getState().tabs.find((tab) => tab.tabId === first).unreadPrompt;
+  store.setTabStatus(first, "connected");
+  store.reportTerminalPrompt(first, "/");
+  assert.equal(unread(), false);
+  store.reportTerminalPrompt(first, "/");
+  assert.equal(unread(), true);
+  store.setActiveTab(first);
+  store.reportTerminalPrompt(first, "/tmp");
+  assert.equal(unread(), false);
+  store.setActiveTab(second);
+  store.reportTerminalPrompt(first, "/tmp");
+  assert.equal(unread(), true);
+  store.bindSession(first, "new-session");
+  store.reportTerminalPrompt(first, "/");
+  assert.equal(unread(), false);
+  store.reportTerminalPrompt(first, "/");
+  store.removeTab(second);
+  assert.equal(unread(), false);
 });
 
 test("remote notices have global rate limits, deduplication, bounded retention and expiry", () => {

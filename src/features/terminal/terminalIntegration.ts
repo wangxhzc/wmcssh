@@ -19,7 +19,7 @@ export function installTerminalIntegration(terminal: Terminal, tabId: string) {
     }),
     terminal.parser.registerOscHandler(7, (data) => {
       const currentDirectory = remoteDirectory(data);
-      if (currentDirectory !== undefined) useTerminalStore.getState().setTerminalMetadata(tabId, { currentDirectory });
+      if (currentDirectory !== undefined) useTerminalStore.getState().reportTerminalPrompt(tabId, currentDirectory);
       return true;
     }),
     ...([9, 777] as const).map((code) => terminal.parser.registerOscHandler(code, (data) => {

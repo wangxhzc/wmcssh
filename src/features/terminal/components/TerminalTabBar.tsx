@@ -189,6 +189,7 @@ export function TerminalTabBar() {
           >
             <button type="button" className="tab-activate" aria-pressed={tab.tabId === activeTabId} onClick={() => { if (!reorder.suppressClick()) activateTab(tab.tabId); }}>
               <TerminalTabTitle title={tab.title} active={tab.tabId === activeTabId} />{tab.kind === "terminal" ? renderStatus(tab.status) : null}
+              {tab.kind === "terminal" && tab.unreadPrompt ? <span className="tab-prompt-dot" title="已返回命令提示符" aria-label="已返回命令提示符" /> : null}
             </button>
             <button
               type="button"
@@ -238,6 +239,7 @@ export function TerminalTabBar() {
               }}
             >
               <span className="tab-list-title">{tab.title}</span>
+              {tab.kind === "terminal" && tab.unreadPrompt ? <span className="tab-prompt-dot" title="已返回命令提示符" aria-label="已返回命令提示符" /> : null}
               <span className="tab-list-kind">{tab.kind === "terminal" ? sessionStatusLabel[tab.status] : "文件"}</span>
             </button>
           ))}

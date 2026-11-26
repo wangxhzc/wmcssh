@@ -500,6 +500,14 @@ textarea::placeholder {
   background: var(--weak);
 }
 
+.tab-prompt-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
 .tab-status-dot.connecting {
   background: var(--warning);
 }
