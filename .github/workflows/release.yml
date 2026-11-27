@@ -60,6 +60,8 @@ jobs:
           cygpath -m /mingw64/bin >> "$GITHUB_PATH"
           cygpath -m /usr/bin >> "$GITHUB_PATH"
           echo "OPENSSL_SRC_PERL=$(cygpath -m /usr/bin/perl.exe)" >> "$GITHUB_ENV"
+          # tauri-build 2.6.1 locates WebView2Loader.dll using Cargo's legacy layout.
+          echo "__CARGO_TEMPORARY_BUILD_DIR_NEW_LAYOUT_OPT_OUT=1" >> "$GITHUB_ENV"
           gcc --version
           /usr/bin/perl --version
           make --version
